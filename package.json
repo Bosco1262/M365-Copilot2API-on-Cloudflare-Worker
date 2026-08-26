@@ -1,0 +1,35 @@
+{
+  "name": "m365-copilot2api-on-cloudflare-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "M365 Copilot ChatHub -> OpenAI-compatible API gateway on Cloudflare Workers (port of M365-Copilot2API)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check": "npm run typecheck && npm run test && npm run check:i18n && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260823.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.125.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_PASSWORD": {
+        "description": "Optional bootstrap administrator password. Leave empty to use the built-in default (`admin123`) and set a new password on first login. You can change it later in the console regardless of this value."
+      },
+      "m365-copilot2api_KV": {
+        "description": "Single KV namespace storing accounts, API keys, sessions, settings and usage stats. A new namespace is provisioned automatically."
+      }
+    }
+  }
+}

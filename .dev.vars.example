@@ -1,0 +1,15 @@
+# Copy to .dev.vars for local `wrangler dev`.
+# In production use: npx wrangler secret put ADMIN_PASSWORD
+
+# Bootstrap administrator password. If unset, defaults to admin123 and the
+# console forces a password change on first login.
+ADMIN_PASSWORD=admin123
+
+# Optional OAuth overrides (defaults match the upstream project):
+# M365_BROWSER_CLIENT_ID=
+# M365_BROWSER_AUTHORITY=
+# M365_BROWSER_REDIRECT_URI=
+# M365_BROWSER_SCOPE=
+
+# When 1/true, non-stream chat responses include upstream raw events in m365 metadata
+# M365_INCLUDE_UPSTREAM_EVENTS=0

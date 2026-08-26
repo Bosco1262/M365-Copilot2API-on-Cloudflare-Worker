@@ -1,0 +1,3755 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>M365 Copilot2API</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="/vendor/lucide.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f5f7;
+        --surface: rgba(255, 255, 255, 0.72);
+        --surface-solid: #fff;
+        --surface-border: rgba(255, 255, 255, 0.5);
+        --line: rgba(0, 0, 0, 0.06);
+        --line-strong: rgba(0, 0, 0, 0.1);
+        --text: #1d1d1f;
+        --muted: #86868b;
+        --accent: #0071e3;
+        --accent-hover: #0077ed;
+        --primary: #1d1d1f;
+        --primary-hover: #000;
+        --green: #34c759;
+        --red: #ff3b30;
+        --orange: #ff9f0a;
+        --purple: #bf5af2;
+        --sidebar-w: 240px;
+        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+        --shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+        --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.1);
+        --radius: 14px;
+        --radius-sm: 10px;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+        --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1c1e;
+          --surface: rgba(44, 44, 46, 0.75);
+          --surface-solid: #2c2c2e;
+          --surface-border: rgba(255, 255, 255, 0.06);
+          --line: rgba(255, 255, 255, 0.06);
+          --line-strong: rgba(255, 255, 255, 0.12);
+          --text: #f5f5f7;
+          --muted: #98989d;
+          --accent: #0a84ff;
+          --accent-hover: #409cff;
+          --primary: #f5f5f7;
+          --primary-hover: #fff;
+          --green: #30d158;
+          --red: #ff453a;
+          --orange: #ff9f0a;
+          --purple: #bf5af2;
+          --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
+          --shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+          --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.3);
+        }
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        max-width: 100%;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          "Inter",
+          "SF Pro Display",
+          "Noto Sans SC",
+          -apple-system,
+          BlinkMacSystemFont,
+          system-ui,
+          sans-serif;
+        font-size: 14px;
+        line-height: 1.4706;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        transition:
+          background 0.3s ease,
+          color 0.3s ease;
+      }
+      .app {
+        display: flex;
+        min-height: 100vh;
+        animation: fadeIn 0.4s var(--ease-out);
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      @keyframes slideUp {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      @keyframes scaleIn {
+        from {
+          opacity: 0;
+          transform: scale(0.95);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      @keyframes springIn {
+        from {
+          opacity: 0;
+          transform: scale(0.9) translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+        }
+      }
+
+      /* Sidebar - Translucent material */
+      .sidebar {
+        width: var(--sidebar-w);
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(30px) saturate(180%);
+        backdrop-filter: blur(30px) saturate(180%);
+        border-right: 1px solid var(--line);
+        padding: 24px 14px 18px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        transition:
+          background 0.3s ease,
+          border-color 0.3s ease;
+        height: 100vh;
+        position: sticky;
+        top: 0;
+        overflow-y: auto;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        padding: 0 10px 22px;
+        color: var(--text);
+      }
+      .logo-mark {
+        width: 22px;
+        height: 22px;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 2px;
+        padding: 2px;
+        flex-shrink: 0;
+        border-radius: 5px;
+        overflow: hidden;
+      }
+      .logo-mark span {
+        display: block;
+        border-radius: 1.5px;
+      }
+      .logo-mark span:nth-child(1) {
+        background: #f25022;
+      }
+      .logo-mark span:nth-child(2) {
+        background: #7fba00;
+      }
+      .logo-mark span:nth-child(3) {
+        background: #00a4ef;
+      }
+      .logo-mark span:nth-child(4) {
+        background: #ffb900;
+      }
+      .nav-label {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        padding: 0 10px;
+        margin: 16px 0 5px;
+      }
+      .nav {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .nav button {
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        color: var(--text);
+        border: 0;
+        border-radius: var(--radius-sm);
+        padding: 9px 10px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        transition:
+          background 0.15s ease,
+          color 0.15s ease,
+          transform 0.15s var(--ease-out);
+        position: relative;
+      }
+      .nav button:hover {
+        background: rgba(0, 0, 0, 0.04);
+      }
+      @media (prefers-color-scheme: dark) {
+        .nav button:hover {
+          background: rgba(255, 255, 255, 0.06);
+        }
+      }
+      .nav button:active {
+        transform: scale(0.97);
+      }
+      .nav button.active {
+        background: rgba(0, 113, 227, 0.1);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      @media (prefers-color-scheme: dark) {
+        .nav button.active {
+          background: rgba(10, 132, 255, 0.15);
+        }
+      }
+      .nav button.active::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 6px;
+        bottom: 6px;
+        width: 3px;
+        background: var(--accent);
+        border-radius: 0 3px 3px 0;
+      }
+      .sidebar-foot {
+        margin-top: auto;
+        color: var(--muted);
+        font-size: 11px;
+        padding: 16px 10px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      /* Main */
+      .main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        transition: background 0.3s ease;
+      }
+      .topbar {
+        height: 48px;
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        backdrop-filter: blur(20px) saturate(180%);
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 28px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        transition:
+          background 0.3s ease,
+          border-color 0.3s ease;
+      }
+      .topbar h1 {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--text);
+      }
+      .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+      }
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+        display: inline-block;
+      }
+
+      /* Content */
+      .content {
+        padding: 28px;
+        max-width: 1200px;
+        flex: 1;
+        margin: 0 auto;
+        width: 100%;
+      }
+
+      /* Stats */
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin-bottom: 24px;
+      }
+      .stat {
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        backdrop-filter: blur(20px) saturate(180%);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px;
+        box-shadow: var(--shadow-sm);
+        transition:
+          transform 0.25s var(--ease-out),
+          box-shadow 0.25s ease,
+          background 0.3s ease,
+          border-color 0.3s ease;
+        animation: slideUp 0.4s var(--ease-out) both;
+      }
+      .stat:nth-child(2) {
+        animation-delay: 0.05s;
+      }
+      .stat:nth-child(3) {
+        animation-delay: 0.1s;
+      }
+      .stat:nth-child(4) {
+        animation-delay: 0.15s;
+      }
+      .stat:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--shadow);
+      }
+      .stat-label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .stat-value {
+        display: block;
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        margin-top: 6px;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        padding-right: 2px;
+      }
+      .stat-value small {
+        font-size: 12px;
+        color: var(--muted);
+        margin-left: 4px;
+        font-weight: 500;
+      }
+      .stat-unit {
+        font-size: 11px;
+        color: var(--muted);
+        margin-left: 3px;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+      }
+      .stat-sub {
+        margin-top: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--green);
+      }
+
+      /* Card */
+      .card {
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        backdrop-filter: blur(20px) saturate(180%);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-sm);
+        overflow: hidden;
+        transition:
+          background 0.3s ease,
+          border-color 0.3s ease;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+      .card-title {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .card-body {
+        padding: 18px;
+      }
+
+      /* Page heading (sections) */
+      .page-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .page-title {
+        font-size: 20px;
+        font-weight: 750;
+        letter-spacing: -0.02em;
+        color: var(--text);
+      }
+      .page-sub {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+
+      /* Quick Actions */
+      .quick-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .quick-action {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        cursor: pointer;
+        transition: all 0.2s var(--ease-out);
+        text-decoration: none;
+        color: inherit;
+      }
+      .quick-action:hover {
+        border-color: var(--accent);
+        box-shadow: var(--shadow-sm);
+        transform: translateY(-2px);
+      }
+      .quick-action:active {
+        transform: scale(0.97);
+      }
+      .quick-action-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+      }
+      .quick-action-icon.blue {
+        background: rgba(0, 113, 227, 0.1);
+        color: var(--accent);
+      }
+      .quick-action-icon.green {
+        background: rgba(52, 199, 89, 0.1);
+        color: var(--green);
+      }
+      .quick-action-icon.purple {
+        background: rgba(191, 90, 242, 0.1);
+        color: var(--purple);
+      }
+      .quick-action-text h4 {
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 2px;
+      }
+      .quick-action-text p {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      /* Forms */
+      .form-group {
+        margin-bottom: 18px;
+      }
+      .form-group:last-child {
+        margin-bottom: 0;
+      }
+      .form-label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: var(--text);
+      }
+      .form-input {
+        width: 100%;
+        border: 1.5px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 9px 12px;
+        outline: 0;
+        font: inherit;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.5);
+        color: var(--text);
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease,
+          background 0.15s ease;
+      }
+      @media (prefers-color-scheme: dark) {
+        .form-input {
+          background: rgba(0, 0, 0, 0.2);
+        }
+      }
+      .form-input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12);
+        background: rgba(255, 255, 255, 0.7);
+      }
+      @media (prefers-color-scheme: dark) {
+        .form-input:focus {
+          background: rgba(0, 0, 0, 0.3);
+          box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
+        }
+      }
+      .form-input::placeholder {
+        color: var(--muted);
+      }
+      .form-hint {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+        line-height: 1.5;
+      }
+      .form-hint code {
+        color: var(--text);
+        background: var(--line);
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+
+      /* Buttons */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(10px);
+        backdrop-filter: blur(10px);
+        color: var(--text);
+        border-radius: var(--radius-sm);
+        padding: 8px 16px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: inherit;
+        letter-spacing: -0.01em;
+        transition: all 0.15s var(--ease-out);
+        min-height: 34px;
+        white-space: nowrap;
+        user-select: none;
+      }
+      .btn:hover {
+        background: var(--surface-solid);
+        border-color: var(--line-strong);
+      }
+      .btn:active {
+        transform: scale(0.97);
+      }
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+        transform: none;
+      }
+      .btn.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: var(--bg);
+      }
+      .btn.primary:hover {
+        background: var(--primary-hover);
+        border-color: var(--primary-hover);
+        box-shadow: var(--shadow-sm);
+      }
+      .btn.danger {
+        color: var(--red);
+        border-color: var(--line);
+      }
+      .btn.danger:hover {
+        background: rgba(255, 59, 48, 0.06);
+        border-color: var(--red);
+      }
+      .btn.success {
+        color: var(--green);
+        border-color: var(--line);
+      }
+      .btn.success:hover {
+        background: rgba(52, 199, 89, 0.06);
+        border-color: var(--green);
+      }
+      .btn-sm {
+        padding: 5px 10px;
+        min-height: 28px;
+        font-size: 11px;
+      }
+
+      /* Table */
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .table th {
+        text-align: left;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        background: transparent;
+        border-bottom: 1px solid var(--line);
+        padding: 10px 18px;
+      }
+      .table td {
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+        font-size: 13px;
+      }
+      .table tr:hover td {
+        background: rgba(0, 113, 227, 0.03);
+      }
+      @media (prefers-color-scheme: dark) {
+        .table tr:hover td {
+          background: rgba(10, 132, 255, 0.04);
+        }
+      }
+      .table tr:last-child td {
+        border-bottom: 0;
+      }
+      .conv-row {
+        cursor: pointer;
+      }
+      .conv-link {
+        display: block;
+        max-width: 360px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        font: inherit;
+        font-weight: 600;
+        text-align: left;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        cursor: pointer;
+      }
+      .conv-meta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+
+      /* Notice */
+      .notice {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        background: var(--primary);
+        color: var(--bg);
+        padding: 12px 18px;
+        border-radius: var(--radius-sm);
+        display: none;
+        box-shadow: var(--shadow-lg);
+        font-weight: 600;
+        font-size: 13px;
+        z-index: 99;
+        animation: slideUp 0.3s var(--ease-out);
+      }
+      .notice.show {
+        display: block;
+      }
+      .notice.success {
+        background: var(--green);
+      }
+      .notice.error {
+        background: var(--red);
+      }
+.notice.warn {
+background: #d9a600;
+}
+
+      /* Account cell */
+      .account-cell {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--accent), #5856d6);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-weight: 600;
+        font-size: 11px;
+      }
+
+      /* Status */
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .status i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .status.online {
+        color: var(--green);
+      }
+      .status.offline {
+        color: var(--muted);
+      }
+      .status.cooldown {
+        color: #d97706;
+      }
+      .status.warn {
+        color: #d97706;
+      }
+
+      /* Empty */
+      .empty {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--muted);
+        font-size: 13px;
+        background: transparent;
+      }
+
+      /* Highlight box */
+      .highlight-box {
+        background: rgba(0, 113, 227, 0.04);
+        border: 1px solid rgba(0, 113, 227, 0.15);
+        border-radius: var(--radius-sm);
+        padding: 14px 16px;
+        margin: 12px 0;
+        animation: scaleIn 0.3s var(--ease-out);
+      }
+      .highlight-box.warning {
+        background: rgba(255, 159, 10, 0.04);
+        border-color: rgba(255, 159, 10, 0.2);
+      }
+      .highlight-box.success {
+        background: rgba(52, 199, 89, 0.04);
+        border-color: rgba(52, 199, 89, 0.2);
+      }
+      .highlight-box-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent);
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .highlight-box.warning .highlight-box-title {
+        color: var(--orange);
+      }
+      .highlight-box.success .highlight-box-title {
+        color: var(--green);
+      }
+      .highlight-box p {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .highlight-box p:last-child {
+        margin-bottom: 0;
+      }
+
+      /* Onboarding */
+      .onboarding {
+        position: relative;
+        overflow: hidden;
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        backdrop-filter: blur(24px) saturate(180%);
+        box-shadow: var(--shadow-sm);
+        padding: 24px;
+        margin-bottom: 24px;
+        animation: slideUp 0.4s var(--ease-out);
+      }
+      .onboarding::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(
+            ellipse 60% 130% at 88% 0%,
+            rgba(0, 113, 227, 0.12) 0%,
+            transparent 62%
+          ),
+          linear-gradient(
+            112deg,
+            rgba(0, 113, 227, 0.04) 0%,
+            rgba(88, 86, 214, 0.04) 48%,
+            rgba(0, 113, 227, 0.06) 100%
+          );
+        pointer-events: none;
+      }
+      @media (prefers-color-scheme: dark) {
+        .onboarding::before {
+          background:
+            radial-gradient(
+              ellipse 60% 130% at 88% 0%,
+              rgba(10, 132, 255, 0.18) 0%,
+              transparent 62%
+            ),
+            linear-gradient(
+              112deg,
+              rgba(10, 132, 255, 0.05) 0%,
+              rgba(94, 92, 230, 0.05) 48%,
+              rgba(10, 132, 255, 0.07) 100%
+            );
+        }
+      }
+      .onboarding-deco {
+        position: absolute;
+        right: -6px;
+        top: 12px;
+        font-family:
+          SF Mono,
+          Menlo,
+          Consolas,
+          monospace;
+        font-size: 11px;
+        line-height: 1.7;
+        color: var(--muted);
+        opacity: 0.34;
+        pointer-events: none;
+        white-space: pre;
+        text-align: right;
+        -webkit-mask-image: linear-gradient(
+          90deg,
+          transparent 0%,
+          #000 30%,
+          #000 82%,
+          transparent 100%
+        );
+        mask-image: linear-gradient(
+          90deg,
+          transparent 0%,
+          #000 30%,
+          #000 82%,
+          transparent 100%
+        );
+        user-select: none;
+      }
+      .onb-grid {
+        position: relative;
+        display: grid;
+        gap: 20px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 21rem);
+      }
+      @media (max-width: 900px) {
+        .onb-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .onb-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .onb-kicker {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .onb-kicker i {
+        width: 14px;
+        height: 14px;
+      }
+      .onb-title {
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin-top: 5px;
+      }
+      .onb-desc {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
+        max-width: 520px;
+        line-height: 1.5;
+      }
+      .onb-head-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .onb-steps {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.45);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .onb-steps {
+          background: rgba(0, 0, 0, 0.28);
+        }
+      }
+      .onb-step {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.55);
+        border: 1px solid var(--line);
+        cursor: pointer;
+        transition:
+          border-color 0.2s var(--ease-out),
+          box-shadow 0.2s var(--ease-out),
+          transform 0.2s var(--ease-out);
+        text-align: left;
+        color: inherit;
+        font: inherit;
+      }
+      @media (prefers-color-scheme: dark) {
+        .onb-step {
+          background: rgba(0, 0, 0, 0.25);
+        }
+      }
+      .onb-step:hover {
+        border-color: var(--accent);
+        box-shadow: var(--shadow-sm);
+        transform: translateX(2px);
+      }
+      .onb-step:active {
+        transform: scale(0.98);
+      }
+      .onb-step-num {
+        flex-shrink: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        background: rgba(0, 113, 227, 0.1);
+        color: var(--accent);
+      }
+      @media (prefers-color-scheme: dark) {
+        .onb-step-num {
+          background: rgba(10, 132, 255, 0.16);
+        }
+      }
+      .onb-step.done .onb-step-num {
+        background: rgba(52, 199, 89, 0.12);
+        color: var(--green);
+      }
+      .onb-step-icon {
+        flex-shrink: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+        display: grid;
+        place-items: center;
+        background: var(--line);
+        color: var(--muted);
+      }
+      .onb-step-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .onb-step-text b {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .onb-step-text b i {
+        width: 14px;
+        height: 14px;
+      }
+      .onb-step-text p {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .onb-step-arrow {
+        flex-shrink: 0;
+        width: 16px;
+        height: 16px;
+        color: var(--muted);
+      }
+      /* Onboarding code panel */
+      .onb-code {
+        background: rgba(255, 255, 255, 0.6);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        padding: 14px;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+      }
+      @media (prefers-color-scheme: dark) {
+        .onb-code {
+          background: rgba(0, 0, 0, 0.3);
+        }
+      }
+      .onb-code-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 12px;
+      }
+      .onb-code-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .onb-code-title i {
+        flex-shrink: 0;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+      }
+      .onb-code-title small {
+        color: var(--muted);
+        font-weight: 500;
+        font-size: 11px;
+      }
+      .onb-mac {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .onb-mac i {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: block;
+      }
+      .onb-mac i:nth-child(1) {
+        background: var(--red);
+      }
+      .onb-mac i:nth-child(2) {
+        background: var(--orange);
+      }
+      .onb-mac i:nth-child(3) {
+        background: var(--green);
+      }
+      .onb-curl {
+        margin: 0;
+        font-family:
+          SF Mono,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        font-size: 11px;
+        line-height: 1.7;
+        white-space: pre-wrap;
+        word-break: break-all;
+        color: var(--muted);
+        max-height: 180px;
+        overflow: auto;
+      }
+      .onb-curl .hl {
+        color: var(--accent);
+      }
+      .onb-status {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .onb-status-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: rgba(0, 0, 0, 0.03);
+        border-radius: var(--radius-sm);
+        padding: 9px 12px;
+        font-size: 12px;
+      }
+      @media (prefers-color-scheme: dark) {
+        .onb-status-row {
+          background: rgba(255, 255, 255, 0.05);
+        }
+      }
+      .onb-status-l {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .onb-status-l i {
+        flex-shrink: 0;
+        width: 14px;
+        height: 14px;
+      }
+      .onb-status-r {
+        flex-shrink: 0;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      /* Copy field */
+      .copy-field {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin: 8px 0;
+      }
+      .copy-field .form-input {
+        flex: 1;
+        font-family:
+          SF Mono,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        font-size: 12px;
+      }
+
+      /* Modal */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.3);
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+      }
+      .modal-overlay.open {
+        display: flex;
+      }
+      .modal {
+        width: min(480px, calc(100vw - 32px));
+        background: var(--surface-solid);
+        -webkit-backdrop-filter: blur(40px) saturate(180%);
+        backdrop-filter: blur(40px) saturate(180%);
+        border: 1px solid var(--surface-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-lg);
+        padding: 28px;
+        animation: scaleIn 0.25s var(--ease-out);
+      }
+      .modal h3 {
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        margin-bottom: 4px;
+      }
+      .modal .subtitle {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 16px;
+      }
+      .modal-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 16px;
+      }
+      .modal-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .modal-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        transition: all 0.15s var(--ease-out);
+      }
+      .modal-close:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+
+      /* macOS terminal */
+      .term {
+        background: #1a1d24;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: var(--shadow-md);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .term-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .term-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .term-dot.red {
+        background: #ff5f57;
+      }
+      .term-dot.yellow {
+        background: #febc2e;
+      }
+      .term-dot.green {
+        background: #28c840;
+      }
+      .term-title {
+        flex: 1;
+        text-align: center;
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.02em;
+      }
+      .term-clear {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 11px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .term-clear:hover {
+        color: var(--text);
+      }
+      .term-body {
+        height: 260px;
+        overflow-y: auto;
+        padding: 12px 14px;
+        font-size: 12px;
+        line-height: 1.75;
+        color: #d1d5db;
+      }
+      .term-body div {
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .term-body .ok {
+        color: #4ade80;
+      }
+      .term-body .err {
+        color: #f87171;
+      }
+      .term-body .warn {
+        color: #fbbf24;
+      }
+      .term-body .dim {
+        color: #6b7280;
+      }
+      .term-body::-webkit-scrollbar {
+        width: 8px;
+      }
+      .term-body::-webkit-scrollbar-thumb {
+        background: #3b4152;
+        border-radius: 4px;
+      }
+
+      /* Responsive */
+      @media (max-width: 900px) {
+        .stats {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .quick-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 640px) {
+        .sidebar {
+          width: 48px;
+          padding: 16px 4px;
+        }
+        .logo span,
+        .nav-label,
+        .nav button span,
+        .sidebar-foot {
+          display: none;
+        }
+        .logo {
+          padding-bottom: 16px;
+          justify-content: center;
+        }
+        .nav button {
+          padding: 8px 0;
+          justify-content: center;
+        }
+        .topbar {
+          padding: 0 14px;
+        }
+        .content {
+          padding: 16px;
+        }
+        .stats {
+          grid-template-columns: 1fr;
+        }
+        .topbar-right {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+        }
+      }
+
+      /* Usage overview card (dashboard) */
+      .usage-overview {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
+        margin-bottom: 24px;
+        box-shadow: var(--shadow-sm);
+      }
+      .usage-overview-item {
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        backdrop-filter: blur(20px) saturate(180%);
+        padding: 16px 20px;
+        transition: background 0.3s ease;
+        animation: slideUp 0.4s var(--ease-out) both;
+      }
+      .usage-overview-item:nth-child(2) {
+        animation-delay: 0.05s;
+      }
+      .usage-overview-item:nth-child(3) {
+        animation-delay: 0.1s;
+      }
+      .usage-overview-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .usage-overview-top i {
+        width: 14px;
+        height: 14px;
+      }
+      .usage-overview-value {
+        display: block;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+        margin-top: 6px;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+      .usage-overview-value small {
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 500;
+        margin-left: 3px;
+      }
+      .usage-overview-sub {
+        margin-top: 3px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      /* Usage page */
+      .usage-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .seg {
+        display: inline-flex;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 3px;
+        gap: 2px;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+      }
+      .seg button {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 5px 12px;
+        border-radius: 7px;
+        cursor: pointer;
+        transition: all 0.15s var(--ease-out);
+      }
+      .seg button:hover {
+        color: var(--text);
+      }
+      .seg button.active {
+        background: var(--primary);
+        color: var(--bg);
+      }
+      .chart-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      @media (max-width: 900px) {
+        .chart-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .chart {
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        backdrop-filter: blur(20px) saturate(180%);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-sm);
+        padding: 16px 18px;
+        animation: slideUp 0.4s var(--ease-out) both;
+      }
+      .chart-title {
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 2px;
+      }
+      .chart-sub {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 12px;
+      }
+      .chart svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .chart-tooltip {
+        position: absolute;
+        background: var(--primary);
+        color: var(--bg);
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 8px;
+        border-radius: 6px;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.1s ease;
+        z-index: 5;
+        white-space: nowrap;
+        box-shadow: var(--shadow-sm);
+      }
+      .bar-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .bar-row:last-child {
+        margin-bottom: 0;
+      }
+      .bar-name {
+        width: 110px;
+        flex-shrink: 0;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bar-track {
+        flex: 1;
+        height: 14px;
+        background: var(--line);
+        border-radius: 7px;
+        overflow: hidden;
+      }
+      .bar-fill {
+        height: 100%;
+        border-radius: 7px;
+        background: linear-gradient(90deg, var(--accent), #5856d6);
+        transition: width 0.5s var(--ease-out);
+      }
+      .bar-val {
+        width: 90px;
+        flex-shrink: 0;
+        text-align: right;
+        font-size: 11px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .bar-fill.green {
+        background: linear-gradient(90deg, #34c759, #30d158);
+      }
+      .bar-fill.orange {
+        background: linear-gradient(90deg, #ff9f0a, #ffb340);
+      }
+      .bar-fill.purple {
+        background: linear-gradient(90deg, #bf5af2, #d391f7);
+      }
+      .bar-fill.red {
+        background: linear-gradient(90deg, #ff3b30, #ff6961);
+      }
+      .bar-fill.teal {
+        background: linear-gradient(90deg, #30b0c7, #5ac8fa);
+      }
+      .bar-fill.pink {
+        background: linear-gradient(90deg, #ff2d55, #ff6482);
+      }
+      .chart-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 120px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .chart-empty i {
+        width: 28px;
+        height: 28px;
+        color: var(--muted);
+        opacity: 0.5;
+      }
+      .pagination {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 12px 18px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .usage-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 52px;
+        padding: 2px 8px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 700;
+        background: rgba(52, 199, 89, 0.12);
+        color: var(--green);
+      }
+      .usage-status.err {
+        background: rgba(255, 59, 48, 0.1);
+        color: var(--red);
+      }
+      .token-stack {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .token-stack b {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* Use Key modal tabs */
+      .uke-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 14px;
+        border-bottom: 1px solid var(--line);
+        flex-wrap: wrap;
+      }
+      .uke-tab {
+        background: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        padding: 8px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        cursor: pointer;
+        transition:
+          color 0.15s ease,
+          border-color 0.15s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .uke-tab i {
+        width: 14px;
+        height: 14px;
+      }
+      .uke-tab:hover {
+        color: var(--text);
+      }
+      .uke-tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+      .uke-file {
+        background: rgba(0, 0, 0, 0.03);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        margin-bottom: 10px;
+        overflow: hidden;
+      }
+      @media (prefers-color-scheme: dark) {
+        .uke-file {
+          background: rgba(255, 255, 255, 0.04);
+        }
+      }
+      .uke-file-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      .uke-file-head code {
+        font-family:
+          SF Mono,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        font-size: 11px;
+        color: var(--text);
+      }
+      .uke-file pre {
+        margin: 0;
+        padding: 12px;
+        font-family:
+          SF Mono,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        font-size: 11px;
+        line-height: 1.65;
+        white-space: pre-wrap;
+        word-break: break-all;
+        color: var(--text);
+        max-height: 240px;
+        overflow: auto;
+      }
+      .uke-file pre .c {
+        color: var(--muted);
+      }
+      .modal.wide {
+        width: min(720px, calc(100vw - 32px));
+      }
+    </style>
+  </head>
+  <body>
+    <div id="login" style="min-height: 100vh; display: grid; place-items: center">
+      <div style="
+          width: min(400px, calc(100vw - 32px));
+          animation: scaleIn 0.5s var(--ease-out);
+        ">
+        <div style="text-align: center; margin-bottom: 24px">
+          <div class="logo" style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              justify-content: center;
+              margin: 0 auto 12px;
+              padding: 0;
+            ">
+            <div class="logo-mark" style="width: 32px; height: 32px">
+              <span></span><span></span><span></span><span></span>
+            </div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.02em">M365 Copilot2API</span>
+          </div>
+          <p data-i18n="idx.login.admin" style="color: var(--muted); font-size: 14px; margin-top: 4px">
+            Administrator Login
+          </p>
+        </div>
+        <form id="loginForm" style="
+            background: var(--surface);
+            -webkit-backdrop-filter: blur(40px) saturate(180%);
+            backdrop-filter: blur(40px) saturate(180%);
+            border: 1px solid var(--surface-border);
+            border-radius: var(--radius);
+            padding: 32px;
+            box-shadow: var(--shadow-lg);
+          ">
+          <div class="form-group">
+            <label data-i18n="idx.login.password" class="form-label">Password</label>
+            <input class="form-input" id="loginPassword" type="password" data-i18n-placeholder="idx.login.placeholder" placeholder="请输入管理员密码（默认：admin123）" autofocus="">
+            <div class="form-hint" style="margin-top: 4px"><span data-i18n-html="idx.login.hint">默认密码为 <code>admin123</code>，首次登录后需修改密码。</span>
+            </div>
+          </div>
+          <button data-i18n="idx.login.submit" type="submit" class="btn primary" style="width: 100%; margin-top: 8px">
+            Log in
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- App -->
+    <div class="app" id="app" style="display: none">
+      <aside class="sidebar">
+        <div class="logo">
+          <div class="logo-mark">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <span>M365 Copilot2API</span>
+        </div>
+        <div data-i18n="nav.overview" class="nav-label">Overview</div>
+        <nav class="nav">
+          <button class="active" data-page="dashboard" onclick="showPage('dashboard')">
+            <i data-lucide="layout-dashboard" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.dashboard.title">Dashboard</span>
+          </button>
+          <button data-page="usage" onclick="showPage('usage')">
+            <i data-lucide="chart-line" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.usage.title">Usage</span>
+          </button>
+        </nav>
+        <div data-i18n="nav.management" class="nav-label">Management</div>
+        <nav class="nav">
+          <button data-page="accounts" onclick="showPage('accounts')">
+            <i data-lucide="users" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.accounts.title">Accounts</span>
+          </button>
+          <button data-page="apikeys" onclick="showPage('apikeys')">
+            <i data-lucide="key-round" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.apikeys.title">API Keys</span>
+          </button>
+          <button data-page="conversations" onclick="showPage('conversations')">
+            <i data-lucide="message-square" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.conversations.title">Conversations</span>
+          </button>
+        </nav>
+        <div data-i18n="nav.system" class="nav-label">System</div>
+        <nav class="nav">
+          <button data-page="modeltest" onclick="showPage('modeltest')">
+            <i data-lucide="flask-conical" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.modeltest.title">Model Management</span>
+          </button>
+          <button data-page="settings" onclick="showPage('settings')">
+            <i data-lucide="settings" style="width: 16px; height: 16px; flex-shrink: 0"></i><span data-i18n="page.settings.title">Settings</span>
+          </button>
+        </nav>
+        <div class="sidebar-foot">v0.4.0</div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <h1 id="pageTitle">Dashboard</h1>
+          <div class="topbar-right">
+            <span style="
+                font-size: 12px;
+                color: var(--muted);
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+              " data-i18n="top.running"><span class="status-dot"></span> Running</span>
+            <button data-i18n="top.logout" class="btn" onclick="logout()">Log out</button>
+          </div>
+        </header>
+
+        <div class="content">
+          <!-- Dashboard -->
+          <section id="page-dashboard">
+            <div class="onboarding" id="onboarding">
+              <div class="onboarding-deco" aria-hidden="true">
+                const response = await client.responses.create({ model: 'auto',
+                input: 'Say hello', }) if (response.output_text) {
+                console.log(response.output_text) }
+              </div>
+              <div class="onb-header">
+                <div>
+                  <div class="onb-kicker" data-i18n="onb.kicker">
+                    <i data-lucide="list-checks"></i> Getting Started
+                  </div>
+                  <h2 data-i18n="onb.title" class="onb-title">
+                    Start using your API gateway in a few steps
+                  </h2>
+                  <p data-i18n="onb.desc" class="onb-desc">
+                    Add a Microsoft account and create an API key to chat
+                    through the OpenAI-compatible API.
+                  </p>
+                </div>
+                <div class="onb-head-actions">
+                  <button class="btn" onclick="toggleOnboarding()" data-i18n="onb.hide">
+                    <i data-lucide="chevron-up" style="width: 14px; height: 14px"></i>
+                    Hide guide
+                  </button>
+                </div>
+              </div>
+              <div class="onb-grid">
+                <div class="onb-steps">
+                  <button class="onb-step" id="onb-s1" onclick="onbStep1()">
+                    <span class="onb-step-num" id="onb-n1">1</span>
+                    <span class="onb-step-icon"><i data-lucide="user-plus" style="width: 15px; height: 15px"></i></span>
+                    <span class="onb-step-text"><b data-i18n="onb.s1">Add a Microsoft Account</b>
+                      <p data-i18n="onb.s1.desc">
+                        Sign in via browser OAuth and add the account to the
+                        pool
+                      </p></span>
+                    <svg class="onb-step-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 12h14"></path>
+                      <path d="m12 5 7 7-7 7"></path>
+                    </svg>
+                  </button>
+                  <button class="onb-step" id="step-s2" onclick="onbStep2()">
+                    <span class="onb-step-num" id="onb-n2">2</span>
+                    <span class="onb-step-icon"><i data-lucide="key-round" style="width: 15px; height: 15px"></i></span>
+                    <span class="onb-step-text"><b data-i18n="qa.key">Create an API Key</b>
+                      <p data-i18n="onb.s2.desc">Generate a key to authenticate API requests</p></span>
+                    <svg class="onb-step-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 12h14"></path>
+                      <path d="m12 5 7 7-7 7"></path>
+                    </svg>
+                  </button>
+                  <button class="onb-step" id="step-s3" onclick="onbStep3()">
+                    <span class="onb-step-num" id="onb-n3">3</span>
+                    <span class="onb-step-icon"><i data-lucide="terminal" style="width: 15px; height: 15px"></i></span>
+                    <span class="onb-step-text"><b data-i18n="onb.s3">Send a request</b>
+                      <p data-i18n="onb.s3.desc">Verify the route with the curl example below</p></span>
+                    <svg class="onb-step-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 12h14"></path>
+                      <path d="m12 5 7 7-7 7"></path>
+                    </svg>
+                  </button>
+                </div>
+                <div class="onb-code">
+                  <div class="onb-code-head">
+                    <div class="onb-code-title" data-i18n="onb.firstReq">
+                      <i data-lucide="square-terminal"></i> First API
+                      request<small data-i18n="onb.openapi">OpenAI-compatible API</small>
+                    </div>
+                    <button class="btn btn-sm" onclick="copyCurl()" data-i18n="onb.copyLabel">
+                      <i data-lucide="copy" style="width: 13px; height: 13px"></i>
+                      Copy
+                    </button>
+                  </div>
+                  <div class="onb-mac" aria-hidden="true">
+                    <i></i><i></i><i></i>
+                  </div>
+                  <pre class="onb-curl" id="onbCurl"></pre>
+                  <div class="onb-status">
+                    <div class="onb-status-row">
+                      <span class="onb-status-l" data-i18n="onb.gatewayLabel"><i data-lucide="radio-tower" style="color: var(--green)"></i>
+                        Gateway</span><span data-i18n="status.online" class="onb-status-r">Online</span>
+                    </div>
+                    <div class="onb-status-row">
+                      <span class="onb-status-l" data-i18n="u.ov.availLabel"><i data-lucide="users" style="color: var(--accent)"></i>
+                        Available Accounts</span><span class="onb-status-r" id="onbStatusAcc">0</span>
+                    </div>
+                    <div class="onb-status-row">
+                      <span class="onb-status-l" data-i18n="onb.keyLabel"><i data-lucide="key-round" style="color: var(--purple)"></i>
+                        API Key</span><span class="onb-status-r" id="onbStatusKey">0</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="usage-overview">
+              <div class="usage-overview-item">
+                <div class="usage-overview-top" data-i18n="u.ov.last24Label">
+                  <i data-lucide="flame"></i> Last 24 hours
+                </div>
+                <span class="usage-overview-value" id="ov24hTok">0<small data-i18n="u.tokens">tokens</small></span>
+                <span class="usage-overview-sub" id="ov24hReq">0 requests</span>
+              </div>
+              <div class="usage-overview-item">
+                <div class="usage-overview-top" data-i18n="u.allTime">
+                  <i data-lucide="trending-up"></i> All-time usage
+                </div>
+                <span class="usage-overview-value" id="ovTotalTok">0<small data-i18n="u.tokens">tokens</small></span>
+                <span class="usage-overview-sub" id="ovTotalReq">0 requests</span>
+              </div>
+              <div class="usage-overview-item">
+                <div class="usage-overview-top" data-i18n="u.ov.reqCountLabel">
+                  <i data-lucide="activity"></i> Request count
+                </div>
+                <span class="usage-overview-value" id="ovTodayTok">0<small data-i18n="u.tokens">tokens</small></span>
+                <span class="usage-overview-sub" id="ovTodayReq">0 requests today</span>
+              </div>
+              <div class="usage-overview-item">
+                <div class="usage-overview-top" data-i18n="u.ov.cacheHitsLabel">
+                  <i data-lucide="piggy-bank"></i> Cache hits
+                </div>
+                <span class="usage-overview-value" id="ovCacheHits">0<small data-i18n="u.tokens">tokens</small></span>
+                <span class="usage-overview-sub" id="ovCacheRate">Hit rate 0%</span>
+              </div>
+            </div>
+            <div class="stats">
+              <div class="stat">
+                <span data-i18n="stat.sessions" class="stat-label">Total sessions</span><span class="stat-value" id="stat-sessions">0</span><span data-i18n="unit.total" class="stat-unit">total</span>
+              </div>
+              <div class="stat">
+                <span data-i18n="stat.hits" class="stat-label">Cache Hits</span><span class="stat-value" id="stat-hits">0</span><span data-i18n="unit.hits" class="stat-unit">hits</span>
+              </div>
+              <div class="stat">
+                <span data-i18n="stat.hitRate" class="stat-label">Hit Rate</span><span class="stat-value" id="stat-rate">0</span><span class="stat-unit">%</span>
+              </div>
+              <div class="stat">
+                <span data-i18n="stat.saved" class="stat-label">Tokens Saved</span><span class="stat-value" id="stat-saved">0</span><span data-i18n="unit.saved" class="stat-unit" style="font-size: 12px">saved</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span data-i18n="qa.title" class="card-title">Quick Actions</span>
+              </div>
+              <div class="card-body">
+                <div class="quick-grid">
+                  <div class="quick-action" onclick="
+                      showPage('accounts');
+                      setTimeout(startPKCE, 200);
+                    ">
+                    <div class="quick-action-icon blue">
+                      <i data-lucide="plus" style="width: 18px; height: 18px"></i>
+                    </div>
+                    <div class="quick-action-text">
+                      <h4 data-i18n="qa.add">Add Account</h4>
+                      <p data-i18n="qa.addDesc">Sign in via Microsoft OAuth</p>
+                    </div>
+                  </div>
+                  <div class="quick-action" onclick="openKeyModal()">
+                    <div class="quick-action-icon green">
+                      <i data-lucide="key" style="width: 18px; height: 18px"></i>
+                    </div>
+                    <div class="quick-action-text">
+                      <h4 data-i18n="qa.key">Create API Key</h4>
+                      <p data-i18n="qa.keyDesc">Generate a key for API access</p>
+                    </div>
+                  </div>
+                  <div class="quick-action" onclick="showPage('conversations')">
+                    <div class="quick-action-icon purple">
+                      <i data-lucide="trash-2" style="width: 18px; height: 18px"></i>
+                    </div>
+                    <div class="quick-action-text">
+                      <h4 data-i18n="qa.clean">Clean Conversations</h4>
+                      <p data-i18n="qa.cleanDesc">Delete conversations you no longer need</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span data-i18n="req.recent" class="card-title">Recent Requests</span><button data-i18n="req.viewAll" class="btn btn-sm" onclick="showPage('usage')">
+                  View all
+                </button>
+              </div>
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th data-i18n="th.time">Time</th>
+                    <th data-i18n="th.model">Model</th>
+                    <th data-i18n="th.endpoint">Endpoint</th>
+                    <th data-i18n="th.tokens">Tokens</th>
+                    <th data-i18n="th.status">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="dashRecentRows">
+                  <tr>
+                    <td data-i18n="common.loading" colspan="5" class="empty">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- Usage -->
+          <section id="page-usage" style="display: none">
+            <div class="page-head">
+              <div>
+                <h2 data-i18n="page.usage.title" class="page-title">Usage</h2>
+                <p data-i18n="u.usageSub" class="page-sub">
+                  Token usage statistics and request details
+                </p>
+              </div>
+              <div class="seg" id="usageRange">
+                <button data-days="1" onclick="setUsageRange(1)">24h</button>
+                <button data-days="7" class="active" onclick="setUsageRange(7)">
+                  7 days
+                </button>
+                <button data-days="30" onclick="setUsageRange(30)">
+                  30 days
+                </button>
+                <button data-days="90" onclick="setUsageRange(90)">
+                  90 days
+                </button>
+              </div>
+            </div>
+            <div class="stats">
+              <div class="stat">
+                <span data-i18n="u.ov.requests" class="stat-label">Total Requests</span><span class="stat-value" id="ug-req">0</span><span class="stat-sub" id="ug-req-sub"></span>
+              </div>
+              <div class="stat">
+                <span data-i18n="u.ov.tokens" class="stat-label">Total Tokens</span><span class="stat-value" id="ug-tok">0</span><span class="stat-sub" id="ug-tok-sub"></span>
+              </div>
+              <div class="stat">
+                <span data-i18n="u.ov.cached" class="stat-label">Cached Tokens</span><span class="stat-value" id="ug-cache">0</span><span data-i18n="u.tokens" class="stat-unit">tokens</span>
+              </div>
+              <div class="stat">
+                <span data-i18n="u.ov.latency" class="stat-label">Average Latency</span><span class="stat-value" id="ug-ms">0</span><span class="stat-unit">ms</span>
+              </div>
+            </div>
+            <div class="chart-grid">
+              <div class="chart">
+                <div data-i18n="chart.trend" class="chart-title">Token Usage Trend</div>
+                <div data-i18n="chart.trendSub" class="chart-sub">Daily token consumption</div>
+                <div id="ugTrendWrap">
+                  <svg id="ugTrend" viewBox="0 0 560 160" preserveAspectRatio="none" style="height: 160px"></svg>
+                </div>
+              </div>
+              <div class="chart">
+                <div data-i18n="chart.model" class="chart-title">Model Distribution</div>
+                <div data-i18n="chart.modelSub" class="chart-sub">Token usage by model</div>
+                <div id="ugModels"></div>
+              </div>
+              <div class="chart">
+                <div data-i18n="chart.ep" class="chart-title">Endpoint Distribution</div>
+                <div data-i18n="chart.epSub" class="chart-sub">Requests by endpoint</div>
+                <div id="ugEndpoints"></div>
+              </div>
+              <div class="chart">
+                <div data-i18n="chart.key" class="chart-title">API Key Usage</div>
+                <div data-i18n="chart.keySub" class="chart-sub">Requests by API key</div>
+                <div id="ugKeys"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span data-i18n="u.details" class="card-title">Request Details</span><span data-i18n="u.records" style="font-size: 11px; color: var(--muted)">Recent Records</span>
+              </div>
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th data-i18n="th.time">Time</th>
+                    <th data-i18n="u.th.key">Key</th>
+                    <th data-i18n="th.model">Model</th>
+                    <th data-i18n="th.endpoint">Endpoint</th>
+                    <th data-i18n="th.tokens">Tokens</th>
+                    <th data-i18n="u.th.latency">Latency</th>
+                  </tr>
+                </thead>
+                <tbody id="ugLogRows">
+                  <tr>
+                    <td data-i18n="common.loading" colspan="6" class="empty">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="pagination">
+                <span id="ugPageInfo"></span><button data-i18n="u.prev" class="btn btn-sm" id="ugPrev" onclick="ugPage(-1)">
+                  Previous</button><button data-i18n="u.next" class="btn btn-sm" id="ugNext" onclick="ugPage(1)">
+                  Next
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Accounts -->
+          <section id="page-accounts" style="display: none">
+            <div class="page-head">
+              <div>
+                <h2 data-i18n="acc.manage" class="page-title">Account Management</h2>
+                <p data-i18n="acc.subtitle" class="page-sub">Authorize and manage Microsoft accounts</p>
+              </div>
+            </div>
+            <div class="card" style="margin-bottom: 16px">
+              <div class="card-head">
+                <span data-i18n="qa.add" class="card-title">Add Account</span>
+              </div>
+              <div class="card-body">
+                <div class="onb-steps" style="margin-bottom: 16px">
+                  <div class="onb-step">
+                    <span class="onb-step-num">1</span>
+                    <span class="onb-step-icon"><i data-lucide="mouse-pointer-click" style="width: 15px; height: 15px"></i></span>
+                    <span class="onb-step-text"><b data-i18n="oauth.s1">Click "Start authorization" below</b>
+                      <p data-i18n="oauth.s1d">A popup window will open the Microsoft sign-in page. Sign in there and return to this page.</p></span>
+                  </div>
+                  <div class="onb-step">
+                    <span class="onb-step-num">2</span>
+                    <span class="onb-step-icon"><i data-lucide="clipboard-copy" style="width: 15px; height: 15px"></i></span>
+                    <span class="onb-step-text"><b data-i18n="oauth.s2">Copy the callback URL from the popup address bar</b>
+                      <p data-i18n-html="oauth.s2d">After signing in the popup may look blank or error out — that is normal. Copy the full URL (including <code>code=...</code> and <code>state=...</code>) from the popup address bar.</p></span>
+                  </div>
+                  <div class="onb-step">
+                    <span class="onb-step-num">3</span>
+                    <span class="onb-step-icon"><i data-lucide="check-check" style="width: 15px; height: 15px"></i></span>
+                    <span class="onb-step-text"><b data-i18n="oauth.s3">Paste and confirm</b>
+                      <p data-i18n="oauth.s3d">Paste it into the "Callback URL" input below, then click "Confirm and add" to finish authorization.</p></span>
+                  </div>
+                </div>
+                <button class="btn primary" onclick="startPKCE()" style="width: 100%; margin-bottom: 12px" data-i18n="oauth.startBtn">
+                  <i data-lucide="link" style="width: 15px; height: 15px"></i>
+                  Start authorization
+                </button>
+                <div class="highlight-box warning" style="margin-top: 0; margin-bottom: 16px">
+                  <div class="highlight-box-title">
+                    <i data-lucide="alert-circle" style="width: 14px; height: 14px"></i><span data-i18n="oauth.warnT">必须手动粘贴回调地址以完成授权</span>
+                  </div>
+                  <p data-i18n-html="oauth.warnB">After signing in, the popup shows a blank or error page — <strong>this is normal</strong>, because the callback endpoint is not a real website. Authorization is <strong>not</strong> complete yet. Copy the <strong>full URL</strong> from the popup address bar (like <code>http://localhost:4141/api/auth/callback?code=M.C5...&amp;state=abc123</code>) and paste it into the "Callback URL" input below.</p>
+                </div>
+                <label data-i18n="acc.callback" class="form-label">Callback URL</label>
+                <div class="copy-field">
+                  <input class="form-input" id="callbackInput" data-i18n-placeholder="acc.callbackPh" placeholder="Paste the full callback URL, e.g. http://localhost:4141/api/auth/callback?code=M.C5...&amp;state=abc123" autocomplete="off">
+                  <button data-i18n="oauth.confirmAdd" class="btn primary" onclick="submitCallback()" style="min-width: 96px">
+                    Confirm and add
+                  </button>
+                </div>
+                <div id="authStatus" style="margin-top: 12px"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span data-i18n="acc.authorized" class="card-title">Authorized Accounts</span>
+                <div style="display: flex; gap: 8px; align-items: center">
+                  <input class="form-input" id="accountSearch" data-i18n-placeholder="acc.search" placeholder="Search accounts…" style="width: 180px; padding: 6px 10px; font-size: 12px" oninput="renderAccounts()">
+                  <div class="seg" id="accountFilter">
+                    <button data-i18n="filter.all" data-f="all" class="active" onclick="setAccountFilter('all')">
+                      All
+                    </button>
+                    <button data-i18n="status.online" data-f="online" onclick="setAccountFilter('online')">
+                      Online
+                    </button>
+                    <button data-i18n="status.cooldown" data-f="cooldown" onclick="setAccountFilter('cooldown')">
+                      Cooldown
+                    </button>
+                    <button data-i18n="status.offline" data-f="offline" onclick="setAccountFilter('offline')">
+                      Offline
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th data-i18n="th.account">Account</th>
+                    <th data-i18n="th.calls">Calls</th>
+                    <th data-i18n="th.status">Status</th>
+                    <th data-i18n="acc.updated">Updated</th>
+                    <th data-i18n="acc.scheduling">Scheduling</th>
+                    <th data-i18n="th.actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="accountRows">
+                  <tr>
+                    <td data-i18n="common.loading" colspan="6" class="empty">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- API Keys -->
+          <section id="page-apikeys" style="display: none">
+            <div class="page-head">
+              <div>
+                <h2 data-i18n="page.apikeys.title" class="page-title">API Keys</h2>
+                <p data-i18n="keys.manage" class="page-sub">Manage Access Keys</p>
+              </div>
+              <button data-i18n="keys.createTitle" class="btn primary" onclick="openKeyModal()">
+                Create key
+              </button>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span data-i18n="keys.list" class="card-title">Key List</span><span data-i18n="keys.onceHint" style="font-size: 11px; color: var(--muted)">The full key is shown only once after creation</span>
+              </div>
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th data-i18n="th.name">Name</th>
+                    <th data-i18n="th.prefix">Prefix</th>
+                    <th data-i18n="th.created">Created</th>
+                    <th data-i18n="th.status">Status</th>
+                    <th data-i18n="th.lastUsed">Last used</th>
+                    <th data-i18n="th.actions" style="text-align: right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="keyRows">
+                  <tr>
+                    <td data-i18n="common.loading" colspan="6" class="empty">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- Conversations -->
+          <section id="page-conversations" style="display: none">
+            <div class="page-head">
+              <div>
+                <h2 data-i18n="conv.manage" class="page-title">Conversation Management</h2>
+                <p data-i18n="conv.subtitle" class="page-sub">View and clean up M365 conversations</p>
+              </div>
+              <div style="display: flex; gap: 8px">
+                <button data-i18n="conv.cleanAll" class="btn danger" onclick="cleanupAll()">
+                  Clean up all
+                </button>
+              </div>
+            </div>
+            <div class="term" id="termBox" style="display: none; margin-bottom: 16px">
+              <div class="term-head">
+                <span class="term-dot red"></span><span class="term-dot yellow"></span><span class="term-dot green"></span>
+                <span class="term-title" id="termTitle">cleanup — m365-copilot2api</span>
+                <button data-i18n="conv.clear" class="term-clear" onclick="termClear()">Clear</button>
+              </div>
+              <div class="term-body" id="termBody"></div>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <span data-i18n="conv.list" class="card-title">Conversation List</span>
+              </div>
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th data-i18n="th.name">Name</th>
+                    <th data-i18n="th.messages">Messages</th>
+                    <th data-i18n="th.account">Account</th>
+                    <th data-i18n="th.lastUpdated">Last updated</th>
+                    <th data-i18n="th.actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="convRows">
+                  <tr>
+                    <td data-i18n="common.loading" colspan="5" class="empty">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- Model Management -->
+          <section id="page-modeltest" style="display: none">
+            <div style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 16px;
+              ">
+              <div>
+                <h2 style="font-size: 18px; font-weight: 700" data-i18n="mm.title">Model Management</h2>
+                <p style="font-size:12px;color:var(--muted);margin-top:2px" data-i18n="mm.subtitle">Sync upstream tones, edit model mappings, and verify availability.</p>
+              </div>
+              <div style="display:flex;gap:8px"><button id="syncBtn" class="btn" onclick="syncModels()" data-i18n="mm.syncBtn">
+                <i data-lucide="refresh-cw" style="width: 14px; height: 14px"></i>
+                Sync tones
+              </button>
+              <button class="btn primary" onclick="modelTestAll()" data-i18n="mm.testAllBtn">
+                <i data-lucide="play" style="width: 14px; height: 14px"></i>
+                Test all
+              </button></div>
+            </div>
+            <div class="card">
+<div class="card-head"><span class="card-title" data-i18n="map.title">Model Mappings</span></div>
+<div class="card-body">
+<p class="form-hint" style="margin-bottom:10px" data-i18n="map.hint">Route public model names to upstream tones. 将公开模型名映射到上游 tone；命中后优先于内置表。</p>
+<table class="table"><thead><tr><th data-i18n="map.th.id">Public Model ID</th><th data-i18n="map.th.tone">Upstream Tone</th><th data-i18n="map.th.name">Display Name</th><th data-i18n="map.th.level">Default Reasoning</th><th></th></tr></thead><tbody id="mappingRows"></tbody></table>
+<div style="margin-top:12px;display:flex;gap:8px"><button class="btn" onclick="addMappingRow()" data-i18n="map.add">+ Add</button><button class="btn primary" onclick="saveModelMappings()" data-i18n="map.save">Save mappings</button></div></div>
+<div class="card-head" style="border-top:1px solid rgba(128,128,128,.25)"><span class="card-title" data-i18n="avail.title">Availability Test</span></div>
+<table class="table">
+                <thead>
+                  <tr>
+                    <th data-i18n="avail.th.model">Model</th>
+                    <th data-i18n="avail.th.status">Status</th>
+                    <th data-i18n="avail.th.latency">Latency</th>
+                    <th data-i18n="avail.th.reply">Reply</th>
+                  </tr>
+                </thead>
+                <tbody id="modelTestRows">
+                  <tr>
+                    <td data-i18n="common.loading" colspan="4" class="empty">Loading...</td>
+                  </tr>
+                </tbody>
+              </table>
+</div>
+</section>
+
+          <!-- Settings -->
+          <section id="page-settings" style="display: none">
+            <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 16px" data-i18n="settings.title">
+              Settings
+            </h2>
+<div class="card">
+              <div class="card-body">
+                <div class="form-group">
+                  <label class="form-label" data-i18n="pw.storage.label">Admin Password Storage</label>
+                  <div style="
+                      display: flex;
+                      gap: 10px;
+                      align-items: center;
+                      flex-wrap: wrap;
+                    ">
+                    <span id="pwSourceBadge" class="status"><i></i>Loading...</span><button data-i18n="pw.change" class="btn" onclick="openChangePassword()">
+                      Change password
+                    </button>
+                  </div>
+                  <p class="form-hint" data-i18n="pw.storage.hint">Secret = provided by ADMIN_PASSWORD (wrangler secret); KV = saved after changing it here.</p>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" data-i18n="settings.timeout">Chat Timeout (seconds)</label><input class="form-input" id="setTimeout" type="number" placeholder="120">
+                </div>
+                <div class="form-group">
+                  <label data-i18n="settings.language" class="form-label" for="languageSelect">Language</label><select class="form-input" id="languageSelect">
+                    <option value="en">English</option>
+                    <option value="zh-CN">简体中文</option>
+                  </select>
+                  <p data-i18n="settings.languageHint" class="form-hint">
+                    Choose the language used by the administration console.
+                  </p>
+                </div>
+                <div style="margin-top: 16px">
+                  <button data-i18n="settings.save" class="btn primary" onclick="saveSettings()">
+                    Save settings
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- Key Modal -->
+    <div class="modal-overlay" id="keyModal">
+      <div class="modal">
+        <h3 data-i18n="qa.key">Create API Key</h3>
+        <p class="subtitle" data-i18n-html="keyModal.hint">Used to authenticate requests to the OpenAI / Anthropic-compatible endpoints. The full key is shown only once — copy it now.</p>
+        <form onsubmit="createKey(event)">
+          <div class="form-group">
+            <label data-i18n="th.name" class="form-label">Name</label>
+            <input class="form-input" id="keyName" value="default" autofocus="">
+            <div class="form-hint" data-i18n="keyName.ph">A label for this key (e.g. "my-laptop", "claude-code")</div>
+          </div>
+          <div class="modal-actions">
+            <button data-i18n="common.cancel" type="button" class="btn" onclick="closeKeyModal()">
+              Cancel
+            </button>
+            <button type="submit" class="btn primary" data-i18n="common.createBtn">Create</button>
+          </div>
+        </form>
+        <div id="keyResult" style="display: none">
+          <div class="highlight-box">
+            <b data-i18n="keyResult.note">Copy and save this key now</b>
+            <div class="copy-field">
+              <input class="form-input" id="keyValue" readonly=""><button data-i18n="common.copy" class="btn-sm btn" onclick="copyKey()">
+                Copy
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Key Modal -->
+    <div class="modal-overlay" id="editKeyModal">
+      <div class="modal">
+        <h3 data-i18n="editKey.title">Edit API Key</h3>
+        <p data-i18n="editKey.sub" class="subtitle">Change the key name</p>
+        <div class="form-group">
+          <label data-i18n="th.name" class="form-label">Name</label>
+          <input class="form-input" id="editKeyName">
+        </div>
+        <div class="modal-actions">
+          <button data-i18n="common.cancel" class="btn" onclick="closeEditKeyModal()">Cancel</button>
+          <button data-i18n="common.save" class="btn primary" onclick="saveEditKey()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Use API Modal -->
+    <div class="modal-overlay" id="useKeyModal">
+      <div class="modal wide">
+        <div class="modal-head">
+          <div>
+            <h3 data-i18n="useKey.title">Use API Key</h3>
+            <p class="subtitle" id="useKeyName"></p>
+          </div>
+          <button class="modal-close" onclick="closeUseKey()">
+            <i data-lucide="x" style="width: 15px; height: 15px"></i>
+          </button>
+        </div>
+        <div class="copy-field">
+          <input class="form-input" id="useKeyVal" readonly="" onclick="this.select()">
+          <button data-i18n="common.copy" class="btn btn-sm" onclick="copyUseKey()">Copy</button>
+        </div>
+        <div class="uke-tabs" id="useKeyClients"></div>
+        <div class="uke-tabs" id="useKeyOs"></div>
+        <div id="useKeyFiles"></div>
+      </div>
+    </div>
+
+    <div class="notice" id="notice" style="display: none"></div>
+
+    <script>
+/*I18N-START*/
+window.I18N_DICT={
+ "en": {
+  "map.saved": "Model mappings saved",
+  "settings.saved": "Settings saved",
+  "common.cancel": "Cancel",
+  "common.save": "Save",
+  "common.delete": "Delete",
+  "common.loading": "Loading...",
+  "page.dashboard.title": "Dashboard",
+  "page.usage.title": "Usage",
+  "page.accounts.title": "Accounts",
+  "page.apikeys.title": "API Keys",
+  "page.conversations.title": "Conversations",
+  "page.modeltest.title": "Model Management",
+  "page.settings.title": "Settings",
+  "dash.subtitle": "Overview of accounts, traffic and cache efficiency.",
+  "usage.subtitle": "Aggregated usage by key, account, model and endpoint.",
+  "accounts.subtitle": "Manage OAuth accounts, scheduling and health.",
+  "apikeys.subtitle": "Create, revoke and manage API keys.",
+  "conv.subtitle": "Local conversation bindings and cloud cleanup.",
+  "mm.subtitle": "Sync upstream tones, edit model mappings, and verify availability.",
+  "settings.subtitle": "Runtime options stored in KV.",
+  "mm.sync": "Sync tones",
+  "mm.syncing": "Syncing...",
+  "mm.testAll": "Test all",
+  "map.title": "Model Mappings",
+  "map.hint": "Route public model names to upstream tones; mappings take priority over built-ins.",
+  "map.add": "+ Add",
+  "map.save": "Save mappings",
+  "map.th.id": "Public Model ID",
+  "map.th.tone": "Upstream Tone",
+  "map.th.name": "Display Name",
+  "map.th.level": "Default Reasoning",
+  "avail.title": "Availability Test",
+  "avail.loading": "Loading...",
+  "avail.th.model": "Model",
+  "avail.th.status": "Status",
+  "avail.th.latency": "Latency",
+  "avail.th.reply": "Reply",
+  "pw.storage.label": "Admin Password Storage",
+  "pw.storage.hint": "Secret = provided by ADMIN_PASSWORD (wrangler secret); KV = saved after changing it here.",
+  "pw.badge.secret": "Secret (ADMIN_PASSWORD)",
+  "pw.badge.kv": "KV (console)",
+  "pw.change": "Change password",
+  "pw.modal.title": "Change password",
+  "pw.current": "Current password",
+  "pw.new": "New password",
+  "pw.confirm": "Confirm new password",
+  "pw.err.required": "Please enter current and new password",
+  "pw.err.min": "New password must be at least 6 characters",
+  "pw.err.mismatch": "Passwords do not match",
+  "pw.ok.redirect": "Password updated. Redirecting to login...",
+  "pw.confirmSecret": "The admin password currently comes from a Cloudflare Secret (ADMIN_PASSWORD).\n\nChanging it here overrides the effective password with a KV-stored new one; the secret will no longer be used unless you set it to the same value.\nTo keep the secret, update it in the Cloudflare Dashboard instead.\n\nContinue?",
+  "sync.none": "No upstream tones found (Microsoft page structure may have changed or network is restricted).",
+  "sync.doneHead": "Found {n} upstream tones: {list}",
+  "sync.fail": "Sync failed",
+  "settings.timeout": "Chat Timeout (seconds)",
+  "settings.languageHint": "Choose the language used by the administration console.",
+  "settings.save": "Save settings",
+  "api.noAccounts": "No M365 account yet — authorize one on the Accounts page first.",
+  "mm.title": "Model Management",
+  "settings.title": "Settings",
+  "berr.toolCalls": "Tool calls per turn must be 1-64",
+  "berr.rounds": "Max tool rounds must be 1-512",
+  "berr.window": "Context window must be >= 1024",
+  "berr.maxOut": "Max output must be > 0 and < context window",
+  "berr.chatTimeout": "Chat timeout must be 5-3600 seconds",
+  "berr.imageTimeout": "Image timeout must be 5-3600 seconds",
+  "berr.logLevel": "Log level must be silent, error, warn, info or debug",
+  "berr.modelId": "Public model ID supports letters/digits/dot/underscore/hyphen (1-128 chars)",
+  "berr.tone": "Upstream tone is not supported",
+  "berr.effort": "Unsupported reasoning effort",
+  "nav.overview": "Overview",
+  "nav.management": "Management",
+  "nav.system": "System",
+  "top.running": "Running",
+  "top.logout": "Log out",
+  "idx.login.admin": "Administrator Login",
+  "idx.login.password": "Password",
+  "idx.login.placeholder": "Enter administrator password",
+  "idx.login.hint": "The default password is <code>admin123</code>. Change it right after the first login.",
+  "idx.login.submit": "Log in",
+  "onb.kicker": "Getting Started",
+  "onb.title": "Start using your API gateway in a few steps",
+  "onb.desc": "Add a Microsoft account and create an API key to chat through the OpenAI-compatible API.",
+  "onb.hide": "Hide guide",
+  "onb.s1": "Add a Microsoft Account",
+  "onb.s1.desc": "Authorize a Microsoft account and add it to the available pool",
+  "onb.s2": "Create an API Key",
+  "onb.s2.desc": "Generate a key to authenticate API requests",
+  "onb.s3": "Send a request",
+  "onb.s3.desc": "Verify the route with the curl example below",
+  "onb.firstReq": "First API request",
+  "onb.openapi": "OpenAI-compatible API",
+  "common.copy": "Copy",
+  "onb.gateway": "Gateway",
+  "stat.sessions": "Total sessions",
+  "unit.total": "total",
+  "stat.hits": "Cache Hits",
+  "unit.hits": "hits",
+  "stat.hitRate": "Hit Rate",
+  "stat.saved": "Tokens Saved",
+  "unit.saved": "saved",
+  "qa.title": "Quick Actions",
+  "qa.add": "Add Account",
+  "qa.addDesc": "Sign in via Microsoft OAuth",
+  "qa.key": "Create API Key",
+  "qa.keyDesc": "Generate a key for API access",
+  "qa.clean": "Clean Conversations",
+  "qa.cleanDesc": "Delete conversations you no longer need",
+  "req.recent": "Recent Requests",
+  "req.viewAll": "View all",
+  "th.time": "Time",
+  "th.model": "Model",
+  "th.endpoint": "Endpoint",
+  "th.status": "Status",
+  "th.calls": "Calls",
+  "status.online": "Online",
+  "status.offline": "Offline",
+  "status.cooldown": "Cooldown",
+  "u.ov.available": "Available accounts",
+  "u.ov.last24": "Last 24 hours",
+  "u.ov.reqCount": "Request count",
+  "u.ov.cacheHits": "Cache hits",
+  "u.tokens": "tokens",
+  "u.ov.requests": "Total Requests",
+  "u.ov.tokens": "Total Tokens",
+  "u.ov.cached": "Cached Tokens",
+  "u.ov.latency": "Average Latency",
+  "chart.trend": "Token Usage Trend",
+  "chart.trendSub": "Daily token consumption",
+  "chart.model": "Model Distribution",
+  "chart.modelSub": "Token usage by model",
+  "chart.ep": "Endpoint Distribution",
+  "chart.epSub": "Requests by endpoint",
+  "chart.key": "API Key Usage",
+  "chart.keySub": "Requests by API key",
+  "u.details": "Request Details",
+  "u.records": "Recent Records",
+  "u.th.key": "Key",
+  "u.th.latency": "Latency",
+  "u.th.in": "Input",
+  "u.th.out": "Output",
+  "u.th.cache": "Cache",
+  "u.prev": "Previous",
+  "u.next": "Next",
+  "u.usageSub": "Token usage statistics and request details",
+  "acc.manage": "Account management",
+  "acc.callback": "Callback URL",
+  "acc.authorized": "Authorized Accounts",
+  "th.account": "Account",
+  "acc.updated": "Updated",
+  "acc.scheduling": "Scheduling",
+  "th.actions": "Actions",
+  "acc.called": "Called {n} times",
+  "acc.limited": "Limited after {n} calls",
+  "keys.manage": "Manage Access Keys",
+  "keys.list": "Key List",
+  "keys.onceHint": "The full key is shown only once after creation",
+  "th.lastUpdated": "Last updated",
+  "th.name": "Name",
+  "th.prefix": "Prefix",
+  "th.created": "Created",
+  "th.lastUsed": "Last used",
+  "modal.createKey": "Create API Key",
+  "common.create": "Create",
+  "keyResult.note": "Copy and save this key now",
+  "editKey.title": "Edit API Key",
+  "editKey.sub": "Change the key name",
+  "useKey.title": "Use API Key",
+  "useKey.btn": "Use Key",
+  "conv.manage": "Conversation management",
+  "conv.list": "Conversation List",
+  "conv.clear": "Clear",
+  "th.messages": "Messages",
+  "btn.view": "View",
+  "btn.delete": "Delete",
+  "conv.none": "No conversations",
+  "conv.finished": "Finished: {ok} succeeded, {fail} failed, {round} rounds total.",
+  "state.noAccountsMatch": "No matching accounts",
+  "state.noKeys": "No API keys",
+  "state.active": "Active",
+  "state.disabled": "Disabled",
+  "state.success": "Success",
+  "state.error": "Error",
+  "state.noRequests": "No requests yet",
+  "state.noData": "No data",
+  "state.healthy": "Healthy",
+  "state.failed": "Failed",
+  "state.notTested": "Not Tested",
+  "state.testing": "Testing…",
+  "state.noModels": "No models available",
+  "stat.hitRateVal": "Hit rate {v}%",
+  "onb.copyLabel": "Copy",
+  "onb.gatewayLabel": "Gateway",
+  "onb.onlineLabel": "Online",
+  "u.ov.availLabel": "Available Accounts",
+  "u.ov.last24Label": "Last 24 hours",
+  "u.ov.reqCountLabel": "Request count",
+  "u.ov.cacheHitsLabel": "Cache hits",
+  "oauth.startBtn": "Start authorization",
+  "mm.syncBtn": "Sync tones",
+  "mm.testAllBtn": "Test all",
+  "common.createBtn": "Create",
+  "onb.keyLabel": "API Key",
+  "u.allTime": "All-time usage",
+  "acc.subtitle": "Authorize and manage Microsoft accounts",
+  "conv.cleanAll": "Clean up all",
+  "keys.createTitle": "Create key",
+  "keyModal.hint": "Used to authenticate requests to the OpenAI / Anthropic-compatible endpoints. The full key is shown only once — copy it now.",
+  "keyName.ph": "A label for this key (e.g. \"my-laptop\", \"claude-code\")",
+  "filter.all": "All",
+  "acc.search": "Search accounts…",
+  "oauth.s1": "Click \"Start authorization\" below",
+  "oauth.s1d": "A popup window will open the Microsoft sign-in page. Sign in there and return to this page.",
+  "oauth.s2": "Copy the callback URL from the popup address bar",
+  "oauth.s2d": "After signing in the popup may look blank or error out — that is normal. Copy the full URL (including <code>code=...</code> and <code>state=...</code>) from the popup address bar.",
+  "oauth.s3": "Paste and confirm",
+  "oauth.s3d": "Paste it into the \"Callback URL\" input below, then click \"Confirm and add\" to finish authorization.",
+  "oauth.warnT": "You must paste the callback URL manually to finish authorization",
+  "oauth.warnB": "After signing in, the popup shows a blank or error page — <strong>this is normal</strong>, because the callback endpoint is not a real website. Authorization is <strong>not</strong> complete yet. Copy the <strong>full URL</strong> from the popup address bar (like <code>http://localhost:4141/api/auth/callback?code=M.C5...&amp;state=abc123</code>) and paste it into the \"Callback URL\" input below.",
+  "th.tokens": "Tokens",
+  "common.edit": "Edit",
+  "state.enable": "Enable",
+  "state.disable": "Disable",
+  "acc.cooldownUntil": "Cooldown until",
+  "oauth.start": "Start authorization",
+  "oauth.confirmAdd": "Confirm and add",
+  "u.requestsToday": "{n} requests today",
+  "u.todayPlus": "Today +{n}",
+  "u.inOut": "Input {a} · Output {b}",
+  "ug.page": "Page {p} / {t} · {n} Total",
+  "settings.language": "Language",
+  "oauth.blockedT": "Popup blocked by the browser",
+  "oauth.blockedD": "Please allow popups for this site, then click \"Start authorization\" again.",
+  "oauth.openedT": "Authorization page opened in a new window",
+  "oauth.openedD": "Sign in inside the popup. After signing in the popup may look blank or error out — that is normal. Copy the <b>full URL</b> from the popup address bar and paste it into the \"Callback URL\" input below.",
+  "oauth.pastePh": "Paste the full callback URL from the popup address bar…",
+  "oauth.timeout": "Authorization timed out. Please start again.",
+  "oauth.closed": "The authorization window was closed before finishing.",
+  "oauth.okT": "Authorization succeeded",
+  "oauth.okD": "The account has been added to the account pool.",
+  "oauth.ok": "Authorization succeeded",
+  "oauth.failExpired": "Authorization failed or expired",
+  "acc.needPaste": "Please paste the callback URL first",
+  "acc.callbackPh": "Paste the full callback URL, e.g. http://localhost:4141/api/auth/callback?code=M.C5...&state=abc123",
+  "onb.curlCopied": "curl copied",
+  "idx.login.success": "Logged in",
+  "confirm.deleteAccount": "Delete this account?",
+  "confirm.deleteKey": "Delete this API key?",
+  "confirm.deleteConv": "Delete this conversation?",
+  "confirm.cleanAll": "Clean up ALL conversations?\nEach conversation will be deleted one by one with progress logged in the terminal.",
+  "state.deleted": "Deleted",
+  "state.updated": "Updated",
+  "keys.nameRequired": "Name cannot be empty",
+  "keys.notFound": "API key not found",
+  "keys.rawUnavailable": "Full key unavailable",
+  "common.copied": "Copied",
+  "useKey.current": "Current key: {name} ({prefix})",
+  "conv.untitled": "Untitled conversation",
+  "conv.unnamed": "Unnamed",
+  "clean.starting": "Starting cleanup of all conversations…",
+  "clean.listFail": "Failed to list conversations: {m}",
+  "clean.done": "Cleanup finished",
+  "mm.clickTestAll": "Click \"Test all\"",
+  "mm.emptyReply": "(empty reply)",
+  "mm.loadFirst": "Load the model list first",
+  "mm.testDone": "Model tests finished",
+  "chart.noTrend": "No trend data yet; it will appear after requests are made.",
+  "u.reqCount": "{n} req"
+ },
+ "zh-CN": {
+  "map.saved": "模型映射已保存",
+  "settings.saved": "设置已保存",
+  "common.cancel": "取消",
+  "common.save": "保存",
+  "common.delete": "删除",
+  "common.loading": "加载中...",
+  "page.dashboard.title": "仪表盘",
+  "page.usage.title": "用量统计",
+  "page.accounts.title": "账号管理",
+  "page.apikeys.title": "API 密钥",
+  "page.conversations.title": "对话管理",
+  "page.modeltest.title": "模型管理",
+  "page.settings.title": "设置",
+  "dash.subtitle": "账号、流量与缓存效率总览。",
+  "usage.subtitle": "按 Key、账号、模型与端点聚合的用量统计。",
+  "accounts.subtitle": "管理 OAuth 账号、调度与健康状态。",
+  "apikeys.subtitle": "创建、撤销与管理 API 密钥。",
+  "conv.subtitle": "本地会话绑定与云端清理。",
+  "mm.subtitle": "同步上游 tone、维护模型映射并测试可用性。",
+  "settings.subtitle": "保存于 KV 的运行时选项。",
+  "mm.sync": "同步 tone",
+  "mm.syncing": "同步中...",
+  "mm.testAll": "全部测试",
+  "map.title": "模型映射",
+  "map.hint": "将公开模型名映射到上游 tone；命中后优先于内置表。",
+  "map.add": "+ 添加",
+  "map.save": "保存映射",
+  "map.th.id": "公开模型 ID",
+  "map.th.tone": "上游 tone",
+  "map.th.name": "显示名称",
+  "map.th.level": "默认推理级别",
+  "avail.title": "可用性测试",
+  "avail.loading": "加载中...",
+  "avail.th.model": "模型",
+  "avail.th.status": "状态",
+  "avail.th.latency": "延迟",
+  "avail.th.reply": "回复",
+  "pw.storage.label": "管理员密码存储",
+  "pw.storage.hint": "Secret＝由 ADMIN_PASSWORD（wrangler secret）提供；KV＝在此修改后保存。",
+  "pw.badge.secret": "Secret（ADMIN_PASSWORD）",
+  "pw.badge.kv": "KV（控制台修改）",
+  "pw.change": "修改密码",
+  "pw.modal.title": "修改密码",
+  "pw.current": "原密码",
+  "pw.new": "新密码",
+  "pw.confirm": "确认新密码",
+  "pw.err.required": "请填写原密码与新密码",
+  "pw.err.min": "新密码至少 6 位",
+  "pw.err.mismatch": "两次输入的新密码不一致",
+  "pw.ok.redirect": "密码已更新，正在跳转登录页...",
+  "pw.confirmSecret": "当前管理员密码来自 Cloudflare Secret（ADMIN_PASSWORD）。\n\n在此修改会把生效密码覆盖为 KV 中保存的新密码，之后该 Secret 将不再被使用（除非把 Secret 改成与新密码一致）。\n如不想覆盖，请前往 Cloudflare Dashboard 更新 Secret。\n\n确定要继续吗？",
+  "sync.none": "未发现上游 tone：微软页面结构可能已变化或网络受限。",
+  "sync.doneHead": "发现 {n} 个上游 tone：{list}",
+  "sync.fail": "同步失败",
+  "settings.timeout": "聊天超时（秒）",
+  "settings.languageHint": "选择控制台使用的语言。",
+  "settings.save": "保存设置",
+  "api.noAccounts": "暂无 M365 账号，请先在“账号”页完成授权。",
+  "mm.title": "模型管理",
+  "settings.title": "设置",
+  "berr.toolCalls": "每轮工具调用数必须为 1-64",
+  "berr.rounds": "最大工具轮次必须为 1-512",
+  "berr.window": "上下文窗口不能小于 1024",
+  "berr.maxOut": "最大输出必须大于 0 且小于上下文窗口",
+  "berr.chatTimeout": "聊天超时必须为 5-3600 秒",
+  "berr.imageTimeout": "图片超时必须为 5-3600 秒",
+  "berr.logLevel": "日志等级必须为 silent、error、warn、info 或 debug",
+  "berr.modelId": "公开模型 ID 只能包含字母、数字、点、下划线或连字符，且长度为 1-128",
+  "berr.tone": "上游 tone 不受支持",
+  "berr.effort": "不支持的推理力度",
+  "nav.overview": "概览",
+  "nav.management": "管理",
+  "nav.system": "系统",
+  "top.running": "运行中",
+  "top.logout": "退出",
+  "idx.login.admin": "管理员登录",
+  "idx.login.password": "密码",
+  "idx.login.placeholder": "请输入管理员密码（默认：admin123）",
+  "idx.login.hint": "默认密码为 <code>admin123</code>，首次登录后需修改密码。",
+  "idx.login.submit": "登录",
+  "onb.kicker": "开始使用",
+  "onb.title": "几步内开始使用你的 API 网关",
+  "onb.desc": "添加 Microsoft 账号、创建 API Key，即可通过 OpenAI 兼容接口对话。",
+  "onb.hide": "隐藏入门引导",
+  "onb.s1": "添加 Microsoft 账号",
+  "onb.s1.desc": "授权 Microsoft 账号，加入可用账号池",
+  "onb.s2": "创建 API Key",
+  "onb.s2.desc": "生成用于认证 API 请求的密钥",
+  "onb.s3": "发送请求",
+  "onb.s3.desc": "用下方 curl 示例验证路由",
+  "onb.firstReq": "首个 API 请求",
+  "onb.openapi": "OpenAI 兼容接口",
+  "common.copy": "复制",
+  "onb.gateway": "网关",
+  "stat.sessions": "总会话数",
+  "unit.total": "个",
+  "stat.hits": "缓存命中",
+  "unit.hits": "次",
+  "stat.hitRate": "命中率",
+  "stat.saved": "节省 Token",
+  "unit.saved": "节省",
+  "qa.title": "快捷操作",
+  "qa.add": "添加账号",
+  "qa.addDesc": "通过 Microsoft OAuth 登录",
+  "qa.key": "创建 API Key",
+  "qa.keyDesc": "生成用于 API 访问的密钥",
+  "qa.clean": "清理对话",
+  "qa.cleanDesc": "删除不需要的对话",
+  "req.recent": "最近请求",
+  "req.viewAll": "查看全部",
+  "th.time": "时间",
+  "th.model": "模型",
+  "th.endpoint": "端点",
+  "th.status": "状态",
+  "th.calls": "调用次数",
+  "status.online": "在线",
+  "status.offline": "离线",
+  "status.cooldown": "冷却",
+  "u.ov.available": "可用账号",
+  "u.ov.last24": "近 24 小时消耗",
+  "u.ov.reqCount": "请求计数",
+  "u.ov.cacheHits": "缓存命中",
+  "u.tokens": "Token",
+  "u.ov.requests": "总请求数",
+  "u.ov.tokens": "总 Token",
+  "u.ov.cached": "缓存命中",
+  "u.ov.latency": "平均耗时",
+  "chart.trend": "Token 使用趋势",
+  "chart.trendSub": "按天汇总的 Token 消耗",
+  "chart.model": "模型分布",
+  "chart.modelSub": "按模型统计的 Token 用量",
+  "chart.ep": "端点分布",
+  "chart.epSub": "按接口统计的请求数",
+  "chart.key": "API Key 用量",
+  "chart.keySub": "按密钥统计的请求数",
+  "u.details": "请求明细",
+  "u.records": "最近记录",
+  "u.th.key": "密钥",
+  "u.th.latency": "耗时",
+  "u.th.in": "输入",
+  "u.th.out": "输出",
+  "u.th.cache": "缓存",
+  "u.prev": "上一页",
+  "u.next": "下一页",
+  "u.usageSub": "Token 用量统计与请求明细",
+  "acc.manage": "账号管理",
+  "acc.callback": "回调地址",
+  "acc.authorized": "已授权账号",
+  "th.account": "账号",
+  "acc.updated": "更新时间",
+  "acc.scheduling": "调度",
+  "th.actions": "操作",
+  "acc.called": "已调用{n}次",
+  "acc.limited": "调用{n}次限流",
+  "keys.manage": "管理访问密钥",
+  "keys.list": "密钥列表",
+  "keys.onceHint": "仅创建时显示完整密钥",
+  "th.lastUpdated": "最近更新",
+  "th.name": "名称",
+  "th.prefix": "前缀",
+  "th.created": "创建时间",
+  "th.lastUsed": "最近使用",
+  "modal.createKey": "创建 API Key",
+  "common.create": "创建",
+  "keyResult.note": "请立即复制保存此密钥",
+  "editKey.title": "编辑 API Key",
+  "editKey.sub": "修改密钥名称",
+  "useKey.title": "使用 API 密钥",
+  "useKey.btn": "使用",
+  "conv.manage": "对话管理",
+  "conv.list": "对话列表",
+  "conv.clear": "清空",
+  "th.messages": "消息数",
+  "btn.view": "查看",
+  "btn.delete": "删除",
+  "conv.none": "暂无对话",
+  "conv.finished": "完成：成功 {ok} 个，失败 {fail} 个，共 {round} 轮。",
+  "state.noAccountsMatch": "暂无匹配账号",
+  "state.noKeys": "暂无 API Key",
+  "state.active": "有效",
+  "state.disabled": "已禁用",
+  "state.success": "成功",
+  "state.error": "错误",
+  "state.noRequests": "暂无请求记录",
+  "state.noData": "暂无数据",
+  "state.healthy": "正常",
+  "state.failed": "失败",
+  "state.notTested": "未测试",
+  "state.testing": "测试中…",
+  "state.noModels": "暂无可用模型",
+  "stat.hitRateVal": "命中率 {v}%",
+  "onb.keyLabel": "API Key",
+  "u.allTime": "历史使用情况",
+  "acc.subtitle": "授权和管理 Microsoft 账号",
+  "conv.cleanAll": "清理全部",
+  "keys.createTitle": "创建 Key",
+  "keyModal.hint": "此密钥用于认证 OpenAI / Anthropic 兼容接口的请求。完整密钥仅显示一次——请立即复制保存。",
+  "keyName.ph": "用于标识此密钥的标签（如\"my-laptop\"、\"claude-code\"）",
+  "filter.all": "全部",
+  "acc.search": "搜索账号…",
+  "oauth.s1": "点击下方“开始授权”",
+  "oauth.s1d": "弹出窗口将打开 Microsoft 登录页面，完成登录后返回此页面。",
+  "oauth.s2": "复制弹出页地址栏中的回调地址",
+  "oauth.s2d": "登录后弹出页会显示空白或错误——这是正常的。复制<b>弹出页地址栏</b>的完整网址（包含 <code>code=...</code> 和 <code>state=...</code>）。",
+  "oauth.s3": "粘贴并确认",
+  "oauth.s3d": "粘贴到下方“回调地址”输入框，点击“确认添加”完成授权",
+  "oauth.warnT": "必须手动粘贴回调地址以完成授权",
+  "oauth.warnB": "在弹出窗口中登录后，页面会显示空白或错误——<strong>这是正常的</strong>，因为回调端点不是真正的网站。授权<strong>尚未</strong>完成。复制弹出页地址栏中的<strong>完整网址</strong>（形如 <code>http://localhost:4141/api/auth/callback?code=M.C5...&amp;state=abc123</code>），粘贴到下方“回调地址”输入框。",
+  "th.tokens": "Token",
+  "common.edit": "编辑",
+  "state.enable": "启用",
+  "state.disable": "禁用",
+  "acc.cooldownUntil": "冷却至",
+  "oauth.start": "开始授权",
+  "oauth.confirmAdd": "确认添加",
+  "u.requestsToday": "今日 {n} 次请求",
+  "u.todayPlus": "今日 +{n}",
+  "u.inOut": "输入 {a} · 输出 {b}",
+  "ug.page": "第 {p} / {t} 页 · 共 {n} 条",
+  "onb.copyLabel": "复制",
+  "onb.gatewayLabel": "网关",
+  "onb.onlineLabel": "在线",
+  "u.ov.availLabel": "可用账号",
+  "u.ov.last24Label": "近 24 小时消耗",
+  "u.ov.reqCountLabel": "请求计数",
+  "u.ov.cacheHitsLabel": "缓存命中",
+  "oauth.startBtn": "开始授权",
+  "mm.syncBtn": "同步 tone",
+  "mm.testAllBtn": "全部测试",
+  "common.createBtn": "创建",
+  "settings.language": "语言",
+  "oauth.blockedT": "弹出窗口被浏览器拦截",
+  "oauth.blockedD": "请允许此网站的弹出窗口，然后重新点击“开始授权”。",
+  "oauth.openedT": "授权页面已在新窗口打开",
+  "oauth.openedD": "请在弹出窗口中完成登录。登录后弹出页会显示空白或错误——这是正常的。复制弹出页地址栏的<b>完整网址</b>，粘贴到下方“回调地址”输入框。",
+  "oauth.pastePh": "粘贴弹出页地址栏中的完整回调地址…",
+  "oauth.timeout": "授权超时，请重新开始授权。",
+  "oauth.closed": "授权窗口在完成前已关闭。",
+  "oauth.okT": "授权成功",
+  "oauth.okD": "账号已加入账号池。",
+  "oauth.ok": "授权成功",
+  "oauth.failExpired": "授权失败或已过期",
+  "acc.needPaste": "请先粘贴回调地址",
+  "acc.callbackPh": "粘贴完整的回调地址，例如 http://localhost:4141/api/auth/callback?code=M.C5...&state=abc123",
+  "onb.curlCopied": "curl 已复制",
+  "idx.login.success": "登录成功",
+  "confirm.deleteAccount": "确定删除此账号？",
+  "confirm.deleteKey": "确定删除此密钥？",
+  "confirm.deleteConv": "确定删除此对话？",
+  "confirm.cleanAll": "确定清理所有对话？\n每条对话将逐一删除并在终端记录日志。",
+  "state.deleted": "已删除",
+  "state.updated": "已更新",
+  "keys.nameRequired": "名称不能为空",
+  "keys.notFound": "找不到密钥",
+  "keys.rawUnavailable": "完整密钥不可用",
+  "common.copied": "已复制",
+  "useKey.current": "当前密钥：{name} ({prefix})",
+  "conv.untitled": "未命名对话",
+  "conv.unnamed": "未命名",
+  "clean.starting": "开始清理所有对话…",
+  "clean.listFail": "获取对话列表失败：{m}",
+  "clean.done": "清理完成",
+  "mm.clickTestAll": "点击“测试全部”",
+  "mm.emptyReply": "（空回复）",
+  "mm.loadFirst": "请先加载模型列表",
+  "mm.testDone": "模型测试完成",
+  "chart.noTrend": "暂无趋势数据，发起请求后将在此显示。",
+  "u.reqCount": "{n} 次"
+ }
+};
+/*@I18N-END*/
+</script>
+<script src="/vendor/i18n.js"></script>
+<script>
+      const t=I18N.t;
+      const $=id=>document.getElementById(id);
+      const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',modeltest:'Model Management',settings:'Settings'};
+const BACKEND_MSG_MAP=[
+[/^每轮工具调用数必须为 1-64$/, 'berr.toolCalls'],
+[/^最大工具轮次必须为 1-512$/, 'berr.rounds'],
+[/^上下文窗口不能小于 1024$/, 'berr.window'],
+[/^最大输出必须大于 0 且小于上下文窗口$/, 'berr.maxOut'],
+[/^聊天超时必须为 5-3600 秒$/, 'berr.chatTimeout'],
+[/^图片超时必须为 5-3600 秒$/, 'berr.imageTimeout'],
+[/^日志等级必须为 silent、error、warn、info 或 debug$/, 'berr.logLevel'],
+[/^公开模型 ID 只能包含字母、数字、点、下划线或连字符，且长度为 1-128$/, 'berr.modelId'],
+[/^public model ID/, 'berr.modelId'],
+[/^上游 tone .*不受支持$/, 'berr.tone'],
+[/unsupported reasoning effort/, 'berr.effort']
+];
+function trBackend(msg){
+if(!msg)return msg;
+for(const[re,k]of BACKEND_MSG_MAP){if(re.test(msg)){
+if(I18N.locale==='zh-CN')return msg;
+return I18N.t(k);
+}}
+return msg;
+}
+      let pkceTimer=null;
+
+      function showNotice(msg,type='info'){
+        const el=$('notice');
+        el.textContent=msg;
+        el.className='notice '+type;
+        el.style.display='block';
+        setTimeout(()=>el.style.display='none',3000);
+      }
+
+      function showPage(p){
+        ['dashboard','usage','accounts','apikeys','conversations','modeltest','settings'].forEach(k=>{
+          $('page-'+k).style.display=k===p?'block':'none';
+          document.querySelector('[data-page="'+k+'"]')?.classList.toggle('active',k===p);
+        });
+        $('pageTitle').textContent=t('page.'+p+'.title');
+        if(p==='dashboard'){loadStats();loadOnboarding();}
+        if(p==='usage')loadUsage();
+        if(p==='accounts')loadAccounts();
+        if(p==='apikeys')loadKeys();
+        if(p==='conversations')loadConversations();
+        if(p==='modeltest'){loadModelTest();loadModelMappings();}
+        if(p==='settings')loadSettings();
+      }
+
+      let onboardingHidden=false;
+      function toggleOnboarding(){
+        onboardingHidden=!onboardingHidden;
+        $('onboarding').style.display=onboardingHidden?'none':'block';
+        try{localStorage.setItem('onb_hidden',onboardingHidden?'1':'0');}catch(e){}
+      }
+      function onbStep1(){showPage('accounts');setTimeout(()=>{startPKCE();document.querySelector('#page-accounts')?.scrollIntoView({behavior:'smooth'});},150);}
+      function onbStep2(){openKeyModal();}
+      function onbStep3(){document.querySelector('#page-dashboard .onb-curl')?.scrollIntoView({behavior:'smooth',block:'center'});}
+
+      function buildCurl(keyPrefix){
+        const base=location.origin;
+        return `curl ${base}/v1/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${keyPrefix}..." \\\n  -d '{"model":"auto","messages":[{"role":"user","content":"Say hello in one sentence."}]}'`;
+      }
+      async function copyCurl(){
+        try{await navigator.clipboard.writeText($('onbCurl').textContent.trim());showNotice(t('onb.curlCopied'),'success');}catch(e){}
+      }
+      async function loadOnboarding(){
+        let acc=0,key=0,prefix='sk-';
+        try{const d=await api('/api/accounts');acc=(d.accounts||[]).length;}
+        catch(e){}
+        try{const d=await api('/api/admin/keys');const k=(d.keys||[]).filter(x=>!x.revoked);key=k.length;if(k[0])prefix=k[0].prefix;}
+        catch(e){}
+        $('onbStatusAcc').textContent=acc;
+        $('onbStatusKey').textContent=key;
+        $('onb-n1').textContent=acc?'✓':'1';
+        $('onb-s1').classList.toggle('done',acc>0);
+        $('onb-n2').textContent=key?'✓':'2';
+        $('step-s2').classList.toggle('done',key>0);
+        $('onbCurl').textContent=buildCurl(prefix);
+        try{if(localStorage.getItem('onb_hidden')==='1'){onboardingHidden=true;$('onboarding').style.display='none';}}catch(e){}
+      }
+
+      async function api(path,opts={}){
+        opts.headers={'Content-Type':'application/json',...(opts.headers||{})};
+        const r=await fetch(path,opts);
+        const t=await r.text();
+        let d;try{d=t?JSON.parse(t):{}}catch{d={error:{message:t}}};
+        if(!r.ok)throw Error(d?.error?.message||t||'Request failed');
+        return d;
+      }
+
+      $('loginForm')?.addEventListener('submit',async e=>{
+        e.preventDefault();
+        try{
+          const d=await api('/api/admin/login',{method:'POST',body:JSON.stringify({password:$('loginPassword').value})});
+          if(d.must_change_password){location.replace('/login');return;}
+          $('login').style.display='none';$('app').style.display='flex';
+          showPage('dashboard');loadStats();
+          showNotice(t('idx.login.success'),'success');
+        }catch(e){showNotice(e.message,'error');}
+      });
+
+      async function logout(){
+        await fetch('/api/admin/logout',{method:'POST'});
+        location.reload();
+      }
+
+      async function loadStats(){
+        try{
+          const [d,u]=await Promise.all([api('/api/stats'),api('/api/usage?days=365')]);
+          const s=d.stats||{};
+          $('stat-sessions').textContent=(s.total_requests||0);
+          $('stat-hits').textContent=(s.cache_hits||0);
+          $('stat-rate').textContent=(s.hit_rate||0).toFixed(1);
+          $('stat-saved').textContent=(s.tokens_saved||0);
+          $('ovCacheHits').textContent=fmtTok(s.cache_hits||0);
+          $('ovCacheRate').textContent=t('stat.hitRateVal',{v:((s.hit_rate||0)).toFixed(1)});
+          const sum=(u.stats||{}).summary||{};
+          $('ov24hTok').textContent=fmtTok(sum.last24h_tokens||0);
+          $('ov24hReq').textContent=(sum.last24h_requests||0)+' requests';
+          $('ovTotalTok').textContent=fmtTok(sum.tokens||0);
+          $('ovTotalReq').textContent=(sum.requests||0)+' requests';
+          $('ovTodayTok').textContent=fmtTok(sum.today_tokens||0);
+          $('ovTodayReq').textContent=t('u.requestsToday',{n:(sum.today_requests||0)});
+          loadRecentRequests();
+        }catch(e){}
+      }
+
+      async function loadRecentRequests(){
+        try{
+          const d=await api('/api/usage/logs?limit=6&offset=0');
+          const rows=(d.logs||[]).map(x=>`<tr>
+            <td style="font-size:12px;color:var(--muted)">${new Date(x.time).toLocaleString()}</td>
+            <td style="font-size:12px">${x.model||'-'}</td>
+            <td><span class="usage-status">${(x.endpoint||'-').replace('/v1/','')}</span></td>
+            <td><span class="token-stack"><b>${(x.input_tokens||0)+(x.output_tokens||0)+(x.cache_tokens||0)}</b></span></td>
+            <td>${x.error?'<span class="usage-status err">'+t('state.error')+'</span>':'<span class="usage-status">'+t('state.success')+'</span>'}</td>
+          </tr>`).join('');
+          $('dashRecentRows').innerHTML=rows||'<tr><td colspan="5" class="empty">'+t('state.noRequests')+'</td></tr>';
+        }catch(e){$('dashRecentRows').innerHTML=`<tr><td colspan="5" class="empty">${t('state.noRequests')}</td></tr>`;}
+      }
+
+      let _accountsCache=[],_accountFilter='all';
+      function setAccountFilter(f){_accountFilter=f;document.querySelectorAll('#accountFilter button').forEach(b=>b.classList.toggle('active',b.dataset.f===f));renderAccounts();}
+      function renderAccounts(){
+        const q=($('accountSearch').value||'').trim().toLowerCase();
+        const list=_accountsCache.filter(x=>{
+          if(_accountFilter==='online'&&x.status!=='online')return false;
+          if(_accountFilter==='cooldown'&&x.status!=='cooldown')return false;
+          if(_accountFilter==='offline'&&(x.status==='online'||x.status==='cooldown'))return false;
+          if(q&&!((x.displayName||'')+' '+(x.email||'')).toLowerCase().includes(q))return false;
+          return true;
+        });
+        $('accountRows').innerHTML=list.length?list.map(x=>{
+          const cooldown=x.cooldownUntil?`<div style="font-size:11px;color:var(--muted);margin-top:3px"><span>${t('acc.cooldownUntil')}</span> ${new Date(x.cooldownUntil).toLocaleString()}</div>`:'';
+          const status=x.status==='cooldown'?`<div><span class="status cooldown"><i></i>${t('status.cooldown')}</span>${cooldown}</div>`:x.status==='online'?'<span class="status online"><i></i>'+t('status.online')+'</span>':'<span class="status offline"><i></i>'+t('status.offline')+'</span>';
+          const calls=x.rateLimited?t('acc.limited',{n:x.callCount||0}):t('acc.called',{n:x.callCount||0});
+          const scheduleEnabled=x.scheduleEnabled!==false;
+          return `<tr><td><div class="account-cell"><div class="avatar">${(x.displayName||x.email||'M')[0]}</div><div><b>${x.displayName||x.email}</b><div style="font-size:11px;color:var(--muted)">${x.email||''}</div></div></div></td><td style="font-size:12px;white-space:nowrap">${calls}</td><td>${status}</td><td style="font-size:12px;color:var(--muted)">${x.updatedAt?new Date(x.updatedAt).toLocaleString():'-'}</td><td><button class="btn-sm btn${scheduleEnabled?'':' danger'}" onclick="toggleAccountSchedule('${x.id}',${!scheduleEnabled})">${scheduleEnabled?'Enabled':'Disabled'}</button></td><td><button class="btn-sm btn danger" onclick="deleteAccount('${x.id}')">Delete</button></td></tr>`;
+        }).join(''):'<tr><td colspan="6" class="empty">'+t('state.noAccountsMatch')+'</td></tr>';
+      }
+      async function loadAccounts(){
+        try{
+          const d=await api('/api/accounts');
+          _accountsCache=d.accounts||[];
+          renderAccounts();
+        }catch(e){$('accountRows').innerHTML=`<tr><td colspan="6" class="empty">${e.message}</td></tr>`;}
+      }
+
+      async function toggleAccountSchedule(id,enabled){
+        try{
+          await api('/api/accounts/schedule',{method:'POST',body:JSON.stringify({id,enabled})});
+          const account=_accountsCache.find(x=>x.id===id);
+          if(account)account.scheduleEnabled=enabled;
+          renderAccounts();
+        }catch(e){showNotice(e.message,'error');}
+      }
+
+      async function deleteAccount(id){
+        if(!confirm(t('confirm.deleteAccount')))return;
+        try{await api('/api/accounts/delete',{method:'POST',body:JSON.stringify({id})});showNotice(t('state.deleted'),'success');loadAccounts();showPage('dashboard');}
+        catch(e){showNotice(e.message,'error');}
+      }
+
+      async function startPKCE(){
+        try{
+          const d=await api('/api/auth/start');
+          $('callbackInput').dataset.state=d.state;
+          const popup=window.open(d.url,'pkce','width=600,height=800');
+          if(!popup){$('authStatus').innerHTML='<div class="highlight-box warning"><div class="highlight-box-title"><i data-lucide="alert-circle" style="width:14px;height:14px"></i>'+t("oauth.blockedT")+'</div><p>'+t("oauth.blockedD")+'</p></div>';lucide.createIcons();return;}
+          $('authStatus').innerHTML='<div class="highlight-box"><div class="highlight-box-title"><i data-lucide="info" style="width:14px;height:14px"></i>'+t("oauth.openedT")+'</div><p>'+t("oauth.openedD")+'</p></div>';
+          $('callbackInput').focus();
+          $('callbackInput').placeholder=t('oauth.pastePh');
+          if(pkceTimer)clearInterval(pkceTimer);
+          const start=Date.now();
+          pkceTimer=setInterval(async()=>{
+            if(Date.now()-start>600000){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box warning"><b>'+t("oauth.timeout")+'</b></div>';return;}
+            if(popup&&popup.closed){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box warning"><b>'+t("oauth.closed")+'</b></div>';return;}
+            try{const s=await api('/api/auth/status?state='+d.state);
+              if(s.status==='authenticated'){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box success"><div class="highlight-box-title"><i data-lucide="check-circle" style="width:14px;height:14px"></i>'+t("oauth.okT")+'</div><p>'+t("oauth.okD")+'</p></div>';showNotice(t('oauth.ok'),'success');loadAccounts();}
+              if(s.status==='error'||s.status==='expired'){clearInterval(pkceTimer);$('authStatus').innerHTML='<div class="highlight-box warning"><b>'+t("oauth.failExpired")+'</b></div>';}
+            }catch(e){}
+          },2000);
+        }catch(e){showNotice(e.message,'error');}
+      }
+
+      async function submitCallback(){
+        const raw=$('callbackInput').value.trim();
+        if(!raw)return showNotice(t('acc.needPaste'),'error');
+        try{
+          let u='/api/auth/callback?';
+          if(raw.includes('://')){u+='url='+encodeURIComponent(raw);}
+          else{u+=raw.replace(/^\?/,'');if(!raw.includes('state='))$('callbackInput').dataset.state&&(u+='&state='+$('callbackInput').dataset.state);}
+          await api(u);showNotice(t('oauth.ok'),'success');$('callbackInput').value='';loadAccounts();showPage('dashboard');
+        }catch(e){showNotice(e.message,'error');}
+      }
+
+      async function loadKeys(){
+        try{
+          const d=await api('/api/admin/keys');
+          const k=d.keys||[];
+          $('keyRows').innerHTML=k.length?k.map(x=>`<tr><td><b>${x.name}</b></td><td><code>${x.prefix}</code></td><td style="font-size:12px;color:var(--muted)">${new Date(x.createdAt).toLocaleString()}</td><td>${x.revoked?'<span class="status offline"><i></i>'+t('state.disabled')+'</span>':'<span class="status online"><i></i>'+t('state.active')+'</span>'}</td><td style="font-size:12px;color:var(--muted)">${x.lastUsedAt?new Date(x.lastUsedAt).toLocaleString():'-'}</td><td style="text-align:right;white-space:nowrap">
+            <button class="btn-sm btn" onclick="openUseKey('${x.id}')">${t('useKey.btn')}</button>
+            <button class="btn-sm btn" onclick="editKey('${x.id}','${x.name.replace(/'/g,"\\'")}')">${t('common.edit')}</button>
+            <button class="btn-sm btn ${x.revoked?'success':'danger'}" onclick="toggleKey('${x.id}',${x.revoked})">${x.revoked?t('state.enable'):t('state.disable')}</button>
+            <button class="btn-sm btn danger" onclick="revokeKey('${x.id}')">${t('btn.delete')}</button>
+          </td></tr>`).join(''):'<tr><td colspan="6" class="empty">No API keys</td></tr>';
+        }catch(e){$('keyRows').innerHTML=`<tr><td colspan="6" class="empty">${e.message}</td></tr>`;}
+      }
+
+      let editKeyId=null;
+      function editKey(id,name){editKeyId=id;$('editKeyName').value=name;$('editKeyModal').classList.add('open');setTimeout(()=>$('editKeyName').focus(),50);}
+      function closeEditKeyModal(){$('editKeyModal').classList.remove('open');editKeyId=null;}
+      async function saveEditKey(){
+        const name=$('editKeyName').value.trim();
+        if(!name)return showNotice(t('keys.nameRequired'),'error');
+        try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id:editKeyId,name})});closeEditKeyModal();showNotice(t('state.updated'),'success');loadKeys();}
+        catch(e){showNotice(e.message,'error');}
+      }
+      async function toggleKey(id,revoked){
+        try{await api('/api/admin/keys',{method:'PUT',body:JSON.stringify({id,revoked:!revoked})});showNotice(revoked?t('state.enable'):t('state.disable'),'success');loadKeys();}
+        catch(e){showNotice(e.message,'error');}
+      }
+
+      function openKeyModal(){$('keyModal').classList.add('open');$('keyResult').style.display='none';$('keyName').value='default';setTimeout(()=>$('keyName').focus(),50);}
+      function closeKeyModal(){$('keyModal').classList.remove('open');}
+      async function copyKey(){try{await navigator.clipboard.writeText($('keyValue').value);showNotice(t('common.copied'),'success');}catch(e){}}
+      async function createKey(e){
+        e.preventDefault();
+        try{
+          const d=await api('/api/admin/keys',{method:'POST',body:JSON.stringify({name:$('keyName').value||'default'})});
+          $('keyValue').value=d.key;$('keyResult').style.display='block';copyKey();loadKeys();
+        }catch(e){showNotice(e.message,'error');}
+      }
+      async function revokeKey(id){if(!confirm(t('confirm.deleteKey')))return;try{await api('/api/admin/keys?id='+id,{method:'DELETE'});loadKeys();}catch(e){showNotice(e.message,'error');}}
+
+      // ===== Usage page =====
+      let usageDays=7, ugPageNo=0, ugTotal=0;
+        let _usageData=null;
+      const UG_PAGE=15;
+
+      function fmtTok(n){
+        n=n||0;
+        if(n>=1e6)return (n/1e6).toFixed(2)+'M';
+        if(n>=1e3)return (n/1e3).toFixed(1)+'K';
+        return String(n);
+      }
+      function fmtNum(n){
+        n=n||0;
+        if(n>=1e6)return (n/1e6).toFixed(2)+'M';
+        if(n>=1e3)return (n/1e3).toFixed(1)+'K';
+        return String(n);
+      }
+
+      function setUsageRange(days){
+        usageDays=days;
+        document.querySelectorAll('#usageRange button').forEach(b=>b.classList.toggle('active',+b.dataset.days===days));
+        ugPageNo=0;
+        loadUsage();
+      }
+
+      async function loadUsage(){
+        try{
+          const d=await api('/api/usage?days='+usageDays);
+          _usageData=d;
+          renderUsage(d);
+}catch(e){
+          $('ugLogRows').innerHTML=`<tr><td colspan="6" class="empty">${e.message}</td></tr>`;
+        }
+      }
+
+      
+      function renderUsage(d){
+          const s=(d.stats||{}).summary||{};
+          $('ug-req').textContent=fmtNum(s.requests);
+          $('ug-req-sub').textContent=t('u.todayPlus',{n:(s.today_requests||0)});
+          $('ug-tok').textContent=fmtTok(s.tokens);
+          $('ug-tok-sub').textContent=t('u.inOut',{a:(s.input||0),b:(s.output||0)});
+          $('ug-cache').textContent=fmtTok(s.cache);
+          $('ug-ms').textContent=(s.avg_ms||0).toLocaleString();
+          renderTrend((d.stats||{}).trend||[]);
+          renderBars('ugModels',(d.stats||{}).models||[],m=>m.name,'tokens');
+          renderBars('ugEndpoints',(d.stats||{}).endpoints||[],m=>m.endpoint,'tokens');
+          renderBars('ugKeys',(d.stats||{}).keys||[],m=>m.api_key_prefix,'requests');
+          loadUsageLogs();
+              }
+function renderTrend(trend){
+        const wrap=$('ugTrendWrap');
+        if(!trend||!trend.length){if(wrap)wrap.innerHTML='<div class="chart-empty"><i data-lucide="line-chart"></i>'+t('chart.noTrend')+'</div>';try{lucide.createIcons();}catch(e){}return;}
+        const W=560,H=160,P=8;
+        const max=Math.max(...trend.map(t=>t.tokens),1);
+        let path='',area='';
+        // For a single data point, use the center coordinate and keep the chart style consistent.
+        if(trend.length===1){
+          const t=trend[0];
+          const cx=W/2;
+          const cy=H-P-(t.tokens/max)*(H-2*P);
+          wrap.innerHTML=`<svg id="ugTrend" viewBox="0 0 560 160" preserveAspectRatio="none" style="height:160px">
+            <circle cx="${cx}" cy="${cy}" r="4" fill="var(--accent)"><title>${t.date} · ${t.tokens.toLocaleString()} tokens</title></circle>
+            <text x="${cx}" y="${H-2}" text-anchor="middle" font-size="9" fill="var(--muted)">${t.date}</text></svg>`;
+          try{lucide.createIcons();}catch(e){}return;
+        }
+        const step=(W-2*P)/(trend.length-1);
+        trend.forEach((t,i)=>{
+          const x=P+i*step;
+          const y=H-P-(t.tokens/max)*(H-2*P);
+          path+=(i?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' ';
+          area+=(i?'L':'M')+x.toFixed(1)+' '+(i?y.toFixed(1):(H-P))+' ';
+        });
+        if(trend.length===2)path='M'+P+' '+(H-P-(trend[0].tokens/max)*(H-2*P))+' L'+(W-P)+' '+(H-P-(trend[1].tokens/max)*(H-2*P));
+        area+='L'+(W-P)+' '+(H-P)+' L'+P+' '+(H-P)+' Z';
+        const gid='ugGrad';
+        wrap.innerHTML=`<svg id="ugTrend" viewBox="0 0 560 160" preserveAspectRatio="none" style="height:160px"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--accent)" stop-opacity="0.28"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0.02"/></linearGradient></defs>
+          <path d="${area}" fill="url(#${gid})"/>
+          <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          ${trend.map((t,i)=>{
+            const x=P+i*step;
+            const y=H-P-(t.tokens/max)*(H-2*P);
+            return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.6" fill="var(--accent)"><title>${t.date} · ${t.tokens.toLocaleString()} tokens</title></circle>`;
+          }).join('')}
+          ${trend.map((t,i)=>{
+            const x=P+i*step;
+            if(i===0||i===trend.length-1||t.tokens===max)return `<text x="${x.toFixed(1)}" y="${H-2}" text-anchor="middle" font-size="9" fill="var(--muted)">${t.date}</text>`;
+            return '';
+          }).join('')}</svg>`;
+        try{lucide.createIcons();}catch(e){}
+      }
+
+      function renderBars(id,items,labelFn,valKey){
+        const el=$(id);
+        if(!items.length){el.innerHTML='<div class="chart-empty"><i data-lucide="chart-bar"></i>'+t('state.noData')+'</div>';try{lucide.createIcons();}catch(e){}return;}
+        const palettes=['','green','orange','purple','teal','red','pink'];
+        const max=Math.max(...items.map(i=>i[valKey]),1);
+        const top=items.slice(0,8);
+        el.innerHTML=top.map((i,idx)=>{
+          const v=i[valKey]||0;
+          const lab=valKey==='requests'?t('u.reqCount',{n:v}):fmtTok(v);
+          const cls=palettes[idx%palettes.length];
+          return `<div class="bar-row"><span class="bar-name">${labelFn(i)}</span><div class="bar-track"><div class="bar-fill ${cls}" style="width:${(v/max*100).toFixed(1)}%"></div></div><span class="bar-val">${lab}</span></div>`;
+        }).join('');
+      }
+
+      async function loadUsageLogs(){
+        try{
+          const d=await api('/api/usage/logs?limit='+UG_PAGE+'&offset='+ugPageNo*UG_PAGE);
+          renderUsageLogs(d);
+}catch(e){
+          $('ugLogRows').innerHTML=`<tr><td colspan="6" class="empty">${e.message}</td></tr>`;
+        }
+      }
+
+      
+      function renderUsageLogs(d){
+          ugTotal=d.total||0;
+          const rows=(d.logs||[]).map(x=>`<tr>
+            <td style="font-size:12px;color:var(--muted)">${new Date(x.time).toLocaleString()}</td>
+            <td><code style="font-size:11px" title="${x.api_key_prefix||'-'}">${x.api_key_prefix||'-'}</code></td>
+            <td style="font-size:12px">${x.model||'-'}</td>
+            <td><span class="usage-status">${(x.endpoint||'-').replace('/v1/','')}</span></td>
+            <td><span class="token-stack"><b>${(x.input_tokens||0)+(x.output_tokens||0)+(x.cache_tokens||0)}</b> in${x.input_tokens||0}/out${x.output_tokens||0}/cache${x.cache_tokens||0}</span></td>
+            <td style="font-size:12px;color:var(--muted)">${(x.duration_ms||0)} ms</td>
+          </tr>`).join('');
+          $('ugLogRows').innerHTML=rows||'<tr><td colspan="6" class="empty">'+t('state.noRequests')+'</td></tr>';
+          const totalPages=Math.max(1,Math.ceil(ugTotal/UG_PAGE));
+          $('ugPageInfo').textContent=t('ug.page',{p:ugPageNo+1,t:totalPages,n:ugTotal});
+          $('ugPrev').disabled=ugPageNo<=0;
+          $('ugNext').disabled=ugPageNo>=totalPages-1;
+              }
+document.addEventListener('i18n:locale',()=>{try{const b=document.querySelector('.nav button.active[data-page]');if(b&&b.dataset.page==='usage'&&_usageData)renderUsage(_usageData);}catch(e){}});
+      function ugPage(delta){
+        ugPageNo=Math.max(0,ugPageNo+delta);
+        loadUsageLogs();
+      }
+
+      // ===== Use API modal =====
+      let useKeyId='',useKeyPrefix='',modelTestKey='';const ukeClients=[
+        {id:'curl',label:'curl'},
+        {id:'codex',label:'Codex CLI'},
+        {id:'claude',label:'Claude Code'},
+        {id:'opencode',label:'OpenCode'},
+      ];
+      const ukeOs=[{id:'unix',label:'macOS / Linux'},{id:'win',label:'Windows'}];
+      let ukeClient='codex',ukeOsSel='unix';
+
+      async function openUseKey(id){
+        useKeyId=id;
+        const d=await api('/api/admin/keys');
+        const rec=(d.keys||[]).find(x=>x.id===id);
+        if(!rec){showNotice(t('keys.notFound'),'error');return;}
+        $('useKeyName').textContent=t('useKey.current',{name:rec.name,prefix:rec.prefix});
+        $('useKeyVal').value=rec.raw||'';
+        $('useKeyModal').classList.add('open');
+        renderUkeTabs();
+        renderUkeFiles();
+      }
+      function closeUseKey(){$('useKeyModal').classList.remove('open');}
+      function renderUkeTabs(){
+        $('useKeyClients').innerHTML=ukeClients.map(c=>`<button class="uke-tab ${c.id===ukeClient?'active':''}" onclick="ukeClient='${c.id}';renderUkeTabs();renderUkeFiles()"><i data-lucide="${c.id==='codex'?'terminal':c.id==='curl'?'square-terminal':c.id==='claude'?'sparkles':'braces'}"></i>${c.label}</button>`).join('');
+        $('useKeyOs').innerHTML=ukeOs.map(o=>`<button class="uke-tab ${o.id===ukeOsSel?'active':''}" onclick="ukeOsSel='${o.id}';renderUkeFiles()">${o.label}</button>`).join('');
+        try{lucide.createIcons();}catch(e){}
+      }
+      function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+      function ukeFile(path,content){
+        return `<div class="uke-file">
+          <div class="uke-file-head"><code>${esc(path)}</code><button class="btn btn-sm" onclick="navigator.clipboard.writeText(this.closest('.uke-file').querySelector('pre').textContent.trim());showNotice(t('common.copied'),'success')">${t('common.copy')}</button></div>
+          <pre>${esc(content)}</pre>
+        </div>`;
+      }
+      function renderUkeFiles(){
+        const base=location.origin;
+        const key=$('useKeyVal').value||useKeyPrefix;
+        let html='';
+        if(ukeClient==='curl'){
+          html=ukeFile('Terminal',`curl ${base}/v1/chat/completions \\
+        -H "Content-Type: application/json" \\
+        -H "Authorization: Bearer ${key} \\
+        -d '{"model":"auto","messages":[{"role":"user","content":"Say hello in one sentence."}]}'`);
+        }else if(ukeClient==='codex'){
+          const cfg=`model_provider = "OpenAI"
+      model = "auto"
+      review_model = "auto"
+
+      [model_providers.OpenAI]
+      name = "M365 Gateway"
+      base_url = "${base}/v1"
+      wire_api = "responses"
+      requires_openai_auth = true
+
+      [features]
+      goals = true`;
+          html=ukeFile(ukeOsSel==='unix'?'~/.codex/config.toml':'%USERPROFILE%\\.codex\\config.toml',cfg);
+          html+=ukeFile('~/.codex/auth.json',`{
+        "OPENAI_API_KEY": "${key}"
+      }`);
+          if(ukeOsSel==='win'){
+            html+=ukeFile('PowerShell',`$env:OPENAI_API_KEY = "${key}"`);
+          }else{
+            html+=ukeFile('Terminal',`export OPENAI_API_KEY="${key}"`);
+          }
+        }else if(ukeClient==='claude'){
+          const cfg=`{
+        "env": {
+          "ANTHROPIC_BASE_URL": "${base}",
+          "ANTHROPIC_AUTH_TOKEN": "${key}",
+          "ANTHROPIC_MODEL": "claude-sonnet"
+        }
+      }`;
+          html=ukeFile(ukeOsSel==='unix'?'~/.claude/settings.json':'%USERPROFILE%\\.claude\\settings.json',cfg);
+          html+=ukeFile(ukeOsSel==='unix'?'Terminal':'PowerShell',(ukeOsSel==='win'?'$env:ANTHROPIC_AUTH_TOKEN="'+key+'"':'export ANTHROPIC_AUTH_TOKEN="'+key+'"'));
+        }else if(ukeClient==='opencode'){
+          const cfg=`{
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+          "m365": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "M365 Gateway",
+            "options": {
+              "baseURL": "${base}/v1",
+              "apiKey": "${key}"
+            },
+            "models": {
+              "auto": {
+                "name": "M365 auto"
+              }
+            }
+          }
+        }
+      }`;
+          html=ukeFile('opencode.json',cfg);
+        }
+        $('useKeyFiles').innerHTML=html;
+      }
+      async function copyUseKey(){
+        const v=$('useKeyVal').value;
+        if(!v){showNotice(t('keys.rawUnavailable'),'error');return;}
+        try{await navigator.clipboard.writeText(v);showNotice(t('common.copied'),'success');}catch(e){}
+      }
+
+      async function loadConversations(){
+        try{
+          const d=await api('/api/m365/conversations');
+          const c=d.data||[];
+          $('convRows').innerHTML=c.length?c.map(x=>{
+            const id=String(x.conversationId||'');
+            const updated=x.updateTimeUtc||x.createTimeUtc;
+            return `<tr class="conv-row" data-conversation-id="${esc(id)}">
+              <td><button class="conv-link" type="button">${esc(x.chatName||t('conv.untitled'))}</button><div class="conv-meta"><code>${esc(id)}</code></div></td>
+              <td>${Number(x.messageCount||0)}</td>
+              <td>${esc(x.accountEmail||x.accountId||'-')}</td>
+              <td style="font-size:12px;color:var(--muted)">${updated?new Date(updated).toLocaleString():'-'}</td>
+              <td><div style="display:flex;gap:6px"><button class="btn-sm btn" data-conv-action="view">${t('btn.view')}</button><button class="btn-sm btn danger" data-conv-action="delete">${t('btn.delete')}</button></div></td>
+            </tr>`;
+          }).join(''):'<tr><td colspan="5" class="empty">'+t('conv.none')+'</td></tr>';
+          $('convRows').querySelectorAll('.conv-row').forEach(row=>{
+            row.addEventListener('click',event=>{
+              const action=event.target.closest('[data-conv-action]')?.dataset.convAction;
+              if(action==='delete'){event.stopPropagation();deleteConv(row.dataset.conversationId);return;}
+              openConversation(row.dataset.conversationId);
+            });
+          });
+        }catch(e){$('convRows').innerHTML=`<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`;}
+      }
+
+      function openConversation(id){window.open('/conversation?id='+encodeURIComponent(id),'_blank','noopener');}
+
+      function termOpen(title){$('termTitle').textContent=title;$('termBody').innerHTML='';$('termBox').style.display='block';}
+      function termLine(msg,cls){const d=document.createElement('div');if(cls)d.className=cls;d.textContent='> '+msg;$('termBody').appendChild(d);$('termBody').scrollTop=$('termBody').scrollHeight;}
+      function termClear(){$('termBody').innerHTML='';}
+
+      async function deleteConv(id){if(!confirm(t('confirm.deleteConv')))return;try{await api('/api/m365/conversations/delete',{method:'POST',body:JSON.stringify({conversation_id:id})});showNotice(t('state.deleted'),'success');loadConversations();}catch(e){showNotice(e.message,'error');}}
+      async function cleanupAll(){
+        const total=confirm(t('confirm.cleanAll'));
+        if(!total)return;
+        termOpen('cleanup — m365-copilot2api');
+        termLine(t('clean.starting'));
+        let ok=0,fail=0,round=0;
+        for(round=1;round<=100;round++){
+          let d;
+          try{d=await api('/api/m365/conversations');}catch(e){termLine(t('clean.listFail',{m:e.message}),'err');break;}
+          const c=d.data||[];
+          if(!c.length){
+            termLine('Round '+round+': list is empty.','dim');
+            break;
+          }
+          termLine('Round '+round+': found '+c.length+' conversations (paged loading; fetch the next batch after deletion)','dim');
+          for(let i=0;i<c.length;i++){
+            const x=c[i];
+            const name=x.chatName||t('conv.unnamed');
+            termLine('['+(i+1)+'/'+c.length+'] Deleting "'+name+'" '+String(x.conversationId||'').slice(0,8)+'…');
+            try{
+              await api('/api/m365/conversations/delete',{method:'POST',body:JSON.stringify({conversation_id:x.conversationId})});
+              termLine('✓ Deleted "'+name+'"','ok');ok++;
+            }catch(e){termLine('✗ Delete failed: '+e.message,'err');fail++;}
+            if(i< c.length-1)await new Promise(r=>setTimeout(r,150));
+          }
+          await new Promise(r=>setTimeout(r,500));
+        }
+        termLine(t('conv.finished',{ok:ok,fail:fail,round:round}),fail?'warn':'ok');
+        showNotice(t('clean.done'),'success');loadConversations();
+      }
+
+      async function loadModelTest(){
+        $('modelTestRows').innerHTML='<tr><td colspan="4" class="empty">Loading...</td></tr>';
+        try{
+          const d=await api('/api/admin/models');
+          const models=d.data||[];
+          if(!models.length){$('modelTestRows').innerHTML='<tr><td colspan="4" class="empty">'+t('state.noModels')+'</td></tr>';return;}
+          $('modelTestRows').innerHTML=models.map(m=>`<tr data-model="${esc(m.id)}"><td><b>${esc(m.id)}</b></td><td><span class="status"><i></i>${t('state.notTested')}</span></td><td style="font-size:12px;color:var(--muted)">-</td><td style="font-size:12px;color:var(--muted)">${t('mm.clickTestAll')}</td></tr>`).join('');
+        }catch(e){$('modelTestRows').innerHTML=`<tr><td colspan="4" class="empty">${e.message}</td></tr>`;}
+      }
+      async function modelTestOne(id,row){
+        const badge=row.querySelector('td:nth-child(2)');
+        const lat=row.querySelector('td:nth-child(3)');
+        const reply=row.querySelector('td:nth-child(4)');
+        badge.innerHTML='<span class="status"><i></i>'+t('state.testing')+'</span>';
+        lat.textContent='-';reply.textContent='';
+        const start=performance.now();
+        try{
+          const d=await api('/api/admin/models/test',{method:'POST',body:JSON.stringify({model:id})});
+          const ms=Math.round(performance.now()-start);
+          const content=d.reply||t('mm.emptyReply');
+          badge.innerHTML='<span class="status online"><i></i>'+t('state.healthy')+'</span>';
+          lat.textContent=ms+' ms';
+          reply.textContent=String(content).slice(0,80);
+        }catch(e){
+          badge.innerHTML='<span class="status offline"><i></i>'+t('state.failed')+'</span>';
+          lat.textContent=Math.round(performance.now()-start)+' ms';
+          reply.textContent=e.message;
+        }
+      }
+      async function modelTestAll(){
+        const rows=[...document.querySelectorAll('#modelTestRows tr[data-model]')];
+        if(!rows.length){showNotice(t('mm.loadFirst'),'error');return;}
+        for(let i=0;i<rows.length;i++){
+          modelTestOne(rows[i].dataset.model,rows[i]);
+          await new Promise(r=>setTimeout(r,250));
+        }
+        showNotice(t('mm.testDone'),'success');
+      }
+
+            let _toneOptions=[];
+function renderMappings(list){
+const tb=$('mappingRows');if(!tb)return;
+tb.innerHTML='';
+const rows=(list&&list.length?list:[{publicModel:'',upstreamTone:'',displayName:'',defaultReasoningLevel:'medium'}]);
+rows.forEach(m=>addMappingRow(m));
+}
+function addMappingRow(m){
+m=m||{publicModel:'',upstreamTone:'',displayName:'',defaultReasoningLevel:'medium'};
+const tb=$('mappingRows');if(!tb)return;
+const tr=document.createElement('tr');
+const toneOpts=_toneOptions.map(o=>'<option'+(o===m.upstreamTone?' selected':'')+'>'+esc(o)+'</option>').join('');
+const lvlOpts=['none','minimal','low','medium','high','xhigh'].map(o=>'<option'+(o===(m.defaultReasoningLevel||'medium')?' selected':'')+'>'+o+'</option>').join('');
+tr.innerHTML='<td><input class="form-input" data-k="publicModel" value="'+esc(m.publicModel||'')+'" placeholder="gpt-5.7"></td>'
++'<td><select class="form-input" data-k="upstreamTone">'+toneOpts+'</select></td>'
++'<td><input class="form-input" data-k="displayName" value="'+esc(m.displayName||'')+'"></td>'
++'<td><select class="form-input" data-k="defaultReasoningLevel">'+lvlOpts+'</select></td>'
++'<td><button class="btn-sm btn danger" onclick="this.closest(\'tr\').remove()">'+t('common.delete')+'</button></td>';
+tb.appendChild(tr);
+}
+async function saveModelMappings(){
+const rows=[...document.querySelectorAll('#mappingRows tr')];
+const list=rows.map(tr=>{
+const get=k=>{const el=tr.querySelector('[data-k="'+k+'"]');return el?el.value.trim():'';};
+return {publicModel:get('publicModel'),upstreamTone:get('upstreamTone'),displayName:get('displayName'),defaultReasoningLevel:get('defaultReasoningLevel')};
+}).filter(x=>x.publicModel!=='');
+try{
+await api('/api/admin/settings',{method:'PUT',body:JSON.stringify({modelMappings:list})});
+showNotice(t('map.saved'),'success');
+loadSettings();
+}catch(e){showNotice(trBackend(e.message),'error');}
+}
+
+async function refreshPasswordSource(){
+      try{
+      const d=await api('/api/admin/session');
+      const s=d.password_source==='secret'?'secret':'kv';
+      window._pwSource=s;
+      const b=$('pwSourceBadge');
+      if(b){b.className='status '+(s==='secret'?'warn':'online');b.innerHTML='<i></i>'+t(s==='secret'?'pw.badge.secret':'pw.badge.kv');}
+      }catch(e){}
+      }
+      let _pwModalReady=false;
+      function ensurePwModal(){
+      if(_pwModalReady)return;_pwModalReady=true;
+      const div=document.createElement('div');
+      div.id='pwModal';div.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9999';
+      div.innerHTML='<div class=\"card\" style=\"width:min(430px,92vw)\"><div class=\"card-head\"><span class=\"card-title\" data-i18n=\"pw.modal.title\">Change Password</span></div><div class=\"card-body\">'
+      +'<label class=\"form-label\" data-i18n=\"pw.current\">Current Password</label><input class=\"form-input\" id=\"pwCur\" type=\"password\" autocomplete=\"current-password\">'
+      +'<label class=\"form-label\" style=\"margin-top:10px\" data-i18n=\"pw.new\">New Password</label><input class=\"form-input\" id=\"pwNew\" type=\"password\" autocomplete=\"new-password\">'
+      +'<label class=\"form-label\" style=\"margin-top:10px\" data-i18n=\"pw.confirm\">Confirm New Password</label><input class=\"form-input\" id=\"pwCon\" type=\"password\" autocomplete=\"new-password\">'
+      +'<p id=\"pwErr\" style=\"color:#d13438;font-size:12px;margin-top:8px;display:none\"></p>'
+      +'<div style=\"margin-top:14px;display:flex;gap:8px;justify-content:flex-end\"><button class=\"btn\" data-i18n=\"common.cancel\" onclick=\"closePwModal()\">Cancel</button><button class=\"btn primary\" data-i18n=\"common.save\" onclick=\"submitPwChange()\">Save</button></div>'
+      +'</div></div>';
+      document.body.appendChild(div);
+      }
+      function openChangePassword(){
+      ensurePwModal();
+      const go=()=>{const m=$('pwModal');m.style.display='flex';$('pwErr').style.display='none';['pwCur','pwNew','pwCon'].forEach(i=>$(i).value='');};
+      api('/api/admin/session').then(d=>{
+      const src=d&&d.password_source==='secret'?'secret':'kv';
+      if(src==='secret'){
+      const msg=t('pw.confirmSecret');
+      if(confirm(msg))go();
+      }else{go();}
+      }).catch(go);
+      }
+      function closePwModal(){$('pwModal').style.display='none';}
+      async function submitPwChange(){
+      const cur=$('pwCur').value,nw=$('pwNew').value,con=$('pwCon').value;
+      const err=$('pwErr');err.style.display='none';
+      if(!cur||!nw){err.textContent=t('pw.err.required');err.style.display='block';return;}
+      if(nw.length<6){err.textContent=t('pw.err.min');err.style.display='block';return;}
+      if(nw!==con){err.textContent=t('pw.err.mismatch');err.style.display='block';return;}
+      try{
+      await api('/api/admin/change-password',{method:'POST',body:JSON.stringify({current_password:cur,new_password:nw})});
+      closePwModal();refreshPasswordSource();
+      showNotice(t('pw.ok.redirect'),'success');
+      setTimeout(()=>{location.href='/login';},1200);
+      }catch(e){err.textContent=trBackend(e.message||'failed');err.style.display='block';}
+      }
+      async function loadModelMappings(){
+try{
+const d=await api('/api/admin/settings');
+_toneOptions=d.upstreamTones||[];
+renderMappings(d.settings.modelMappings||[]);
+}catch(e){showNotice(e.message,'error');}
+}
+
+async function syncModels(){
+const btn=$('syncBtn');
+if(btn){btn.disabled=true;btn.dataset.orig=btn.innerHTML;btn.textContent=t('mm.syncing');}
+try{
+const d=await api('/api/admin/models/sync',{method:'POST'});
+const tones=(d.upstream_tones||[]);
+if(tones.length===0){
+showNotice(t('sync.none'),'warn');
+}else{
+const list=tones.slice(0,8).join(', ')+(tones.length>8?' ...':'');showNotice(t('sync.doneHead',{n:String(tones.length),list}),'success');
+}
+}catch(e){showNotice(trBackend(e.message||t('sync.fail')),'error');}
+finally{if(btn){btn.disabled=false;btn.innerHTML=btn.dataset.orig||t('mm.sync');}}
+}
+
+      async function loadSettings(){
+        try{
+          const d=await api('/api/admin/settings');
+          const v=d.settings||{};
+          refreshPasswordSource();
+          $('setTimeout').value=v.chatTimeoutSeconds||120;
+        }catch(e){showNotice(e.message,'error');}
+      }
+      async function saveSettings(){
+        try{
+              const timeout=$('setTimeout').value.trim();
+          const body={};
+              if(timeout)body.chatTimeoutSeconds=parseInt(timeout);
+          await api('/api/admin/settings',{method:'PUT',body:JSON.stringify(body)});
+          showNotice(t('settings.saved'),'success');
+        }catch(e){showNotice(trBackend(e.message),'error');}
+      }
+
+      setInterval(()=>{if($('page-accounts').style.display!=='none')loadAccounts();},15000);
+
+      // Init
+      try{lucide.createIcons();}catch(e){}
+      I18N.wireSelect($('languageSelect'));
+      document.addEventListener('i18n:locale',()=>{const b=document.querySelector('.nav button.active[data-page]');if(b)$('pageTitle').textContent=t('page.'+b.dataset.page+'.title');});
+      fetch('/api/admin/session').then(r=>r.json()).then(d=>{
+        if(d.authenticated&&d.must_change_password){location.replace('/login');}
+        else if(d.authenticated){$('login').style.display='none';$('app').style.display='flex';showPage('dashboard');loadStats();loadOnboarding();refreshPasswordSource();}
+        else{$('login').style.display='grid';}
+      }).catch(()=>{$('login').style.display='grid';});
+    </script>
+  </body>
+</html>

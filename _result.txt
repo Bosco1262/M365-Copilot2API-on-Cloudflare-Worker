@@ -1,0 +1,12 @@
+ERROR: node:internal/modules/cjs/loader:1520
+  throw err;
+  ^
+
+Error: Cannot find module 'C:\Github Desktop\新建文件夹\M365-Copilot2API-on-Cloudflare-Worker\_extracted.js'
+    at node:internal/modules/cjs/loader:1517:15
+    at node:internal/main/check_syntax:33:20 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: []
+}
+
+Node.js v24.19.0

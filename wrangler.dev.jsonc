@@ -1,0 +1,26 @@
+{
+  // Local development config: `npm run dev` uses this file so the m365-copilot2api_KV
+  // binding resolves to a simulated namespace without a real id.
+  // Production/dashboard deploys use ./wrangler.jsonc (provisioning-friendly,
+  // no id needed there).
+  "name": "m365-copilot2api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+
+  "assets": {
+    "directory": "./assets",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
+  },
+
+  "kv_namespaces": [
+    {
+      "binding": "m365-copilot2api_KV",
+      "id": "local-dev-namespace"
+    }
+  ],
+
+  "triggers": {
+    "crons": ["*/30 * * * *"]
+  }
+}
