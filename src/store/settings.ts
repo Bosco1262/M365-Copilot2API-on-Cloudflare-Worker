@@ -28,13 +28,25 @@ export interface RuntimeSettings {
   redirectUri: string;
   scope: string;
   modelMappings: ModelMapping[];
+  discoveredTones: string[];
   toolPlanningMode: string;
 }
 
+// Default mappings seed the console's editable model table. The mapping
+// table is the single source of truth at runtime: a mapped model is pinned to
+// its upstreamTone; an unmapped (e.g. deleted) model is rejected outright.
 export const DEFAULT_MODEL_MAPPINGS: ModelMapping[] = [
-  { publicModel: "gpt-5.6-sol", upstreamTone: "Gpt_5_6_Reasoning", displayName: "GPT-5.6-Sol", defaultReasoningLevel: "low" },
-  { publicModel: "gpt-5.6-terra", upstreamTone: "Gpt_5_6_Reasoning", displayName: "GPT-5.6-Terra", defaultReasoningLevel: "medium" },
-  { publicModel: "gpt-5.6-luna", upstreamTone: "Gpt_5_6_Reasoning", displayName: "GPT-5.6-Luna", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.2", upstreamTone: "Gpt_5_2_Chat", displayName: "GPT-5.2", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.2-reasoning", upstreamTone: "Gpt_5_2_Reasoning", displayName: "GPT-5.2 Reasoning", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.3", upstreamTone: "Gpt_5_3_Chat", displayName: "GPT-5.3", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.4", upstreamTone: "Gpt_5_4_Chat", displayName: "GPT-5.4", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.4-reasoning", upstreamTone: "Gpt_5_4_Reasoning", displayName: "GPT-5.4 Reasoning", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.5", upstreamTone: "Gpt_5_5_Chat", displayName: "GPT-5.5", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.5-reasoning", upstreamTone: "Gpt_5_5_Reasoning", displayName: "GPT-5.5 Reasoning", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-5.6-reasoning", upstreamTone: "Gpt_5_6_Reasoning", displayName: "GPT-5.6 Reasoning", defaultReasoningLevel: "medium" },
+  { publicModel: "gpt-image-2", upstreamTone: "magic", displayName: "GPT Image 2", defaultReasoningLevel: "none" },
+  { publicModel: "claude-sonnet", upstreamTone: "Claude_Sonnet", displayName: "Claude Sonnet", defaultReasoningLevel: "medium" },
+  { publicModel: "claude-sonnet-reasoning", upstreamTone: "Claude_Sonnet_Reasoning", displayName: "Claude Sonnet Reasoning", defaultReasoningLevel: "medium" },
 ];
 
 export const CONFIGURABLE_CODEX_MODELS = [
@@ -42,9 +54,6 @@ export const CONFIGURABLE_CODEX_MODELS = [
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.5",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
   "codex-auto-review",
 ];
 
@@ -60,6 +69,7 @@ export const KNOWN_UPSTREAM_TONES = [
   "Gpt_5_6_Reasoning",
   "Claude_Sonnet",
   "Claude_Sonnet_Reasoning",
+  "magic",
 ];
 
 export const RESTART_REQUIRED_FIELDS = [
@@ -98,6 +108,7 @@ export function defaultSettings(env: Env): RuntimeSettings {
     redirectUri: "",
     scope: "",
     modelMappings: [...DEFAULT_MODEL_MAPPINGS],
+    discoveredTones: [],
     toolPlanningMode: "router",
   };
 }
@@ -130,6 +141,7 @@ export function validateSettings(v: RuntimeSettings): string | null {
   if (v.imageTimeoutSeconds < 5 || v.imageTimeoutSeconds > 3600) return "图片超时必须为 5-3600 秒";
   if (!["silent", "error", "warn", "info", "debug"].includes(v.logLevel))
     return "日志等级必须为 silent、error、warn、info 或 debug";
+  if (!(v.modelMappings ?? []).length) return "至少需要配置一条模型映射";
   const seen = new Set<string>();
   for (const mapping of v.modelMappings ?? []) {
     const model = (mapping.publicModel ?? "").trim();
@@ -138,7 +150,9 @@ export function validateSettings(v: RuntimeSettings): string | null {
     const key = model.toLowerCase();
     if (seen.has(key)) return `公开模型 ID "${model}" 重复`;
     seen.add(key);
-    if (!KNOWN_UPSTREAM_TONES.includes((mapping.upstreamTone ?? "").trim()))
+    // No static whitelist: any well-formed tone identifier is allowed so that
+    // manually entered or newly fetched tones can be saved.
+    if (!/^[A-Za-z0-9_]{1,128}$/.test((mapping.upstreamTone ?? "").trim()))
       return `上游 tone "${mapping.upstreamTone}" 不受支持`;
     if ((mapping.displayName ?? "").trim() === "") return `公开模型 "${model}" 缺少显示名称`;
     const level = (mapping.defaultReasoningLevel ?? "").trim().toLowerCase();

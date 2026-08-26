@@ -98,7 +98,7 @@ describe("anthropic /v1/messages true streaming", () => {
     );
 
     const { ctx, collected, pending } = makeCtx(
-      JSON.stringify({ model: "gpt-5.6-sol", max_tokens: 100, stream: true, messages: [{ role: "user", content: "hi" }] })
+      JSON.stringify({ model: "gpt-5.5", max_tokens: 100, stream: true, messages: [{ role: "user", content: "hi" }] })
     );
     const resPromise = handleAnthropicMessages(ctx);
     const res = await resPromise;
@@ -165,7 +165,7 @@ describe("anthropic /v1/messages true streaming", () => {
 
     const { ctx, pending } = makeCtx(
       JSON.stringify({
-        model: "m",
+        model: "gpt-5.5",
         stream: true,
         max_tokens: 10,
         messages: [{ role: "user", content: "list files" }],
@@ -206,7 +206,7 @@ describe("anthropic /v1/messages true streaming", () => {
       throw Object.assign(new Error("boom"), { name: "DialError", status: 502, retryAfter: 0 });
     });
     const { ctx, pending } = makeCtx(
-      JSON.stringify({ model: "m", stream: true, messages: [{ role: "user", content: "hi" }] })
+      JSON.stringify({ model: "gpt-5.5", stream: true, messages: [{ role: "user", content: "hi" }] })
     );
     const res = await handleAnthropicMessages(ctx);
     const raw = await readAll(res);

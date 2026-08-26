@@ -23,20 +23,6 @@ interface ModelSpec {
   defaultReasoningLevel?: string;
 }
 
-const GATEWAY_MODELS: ModelSpec[] = [
-  { id: "gpt-5.2", owner: "microsoft-365" },
-  { id: "gpt-5.2-reasoning", owner: "microsoft-365" },
-  { id: "gpt-5.3", owner: "microsoft-365" },
-  { id: "gpt-5.4", owner: "microsoft-365" },
-  { id: "gpt-5.4-reasoning", owner: "microsoft-365" },
-  { id: "gpt-5.5", owner: "microsoft-365" },
-  { id: "gpt-5.5-reasoning", owner: "microsoft-365" },
-  { id: "gpt-5.6-reasoning", owner: "microsoft-365" },
-  { id: "gpt-image-2", owner: "microsoft-365", displayName: "GPT Image 2" },
-  { id: "claude-sonnet", owner: "anthropic-via-microsoft-365" },
-  { id: "claude-sonnet-reasoning", owner: "anthropic-via-microsoft-365" },
-];
-
 // Port of modelTone.
 export function modelTone(model: string): string {
   switch ((model ?? "").trim().toLowerCase()) {
@@ -91,53 +77,26 @@ function configuredModelMapping(
 }
 
 // Port of reasoningTone.
+// The mapping table is the single source of truth: a hit pins the upstream
+// tone verbatim; a miss is rejected outright so deleted rows stop working.
 export function reasoningTone(model: string, effort: string, settings: RuntimeSettings): string | Error {
-  const e = normalizeReasoningEffort(effort);
-  if (e instanceof Error) return e;
+  const err = normalizeReasoningEffort(effort);
+  if (err instanceof Error) return err;
   const mapping = configuredModelMapping(model, settings.modelMappings);
   if (mapping) return mapping.upstreamTone;
-  const base = modelTone(model);
-  if (model.toLowerCase().includes("reasoning")) return base;
-  if (e === "" || e === "none" || e === "minimal" || e === "low") return base;
-  switch ((model ?? "").trim().toLowerCase()) {
-    case "claude":
-    case "claude-sonnet":
-      return "Claude_Sonnet_Reasoning";
-    case "gpt-5.2":
-      return "Gpt_5_2_Reasoning";
-    case "gpt-5.3":
-      return "Gpt_5_3_Reasoning";
-    case "gpt-5.4":
-      return "Gpt_5_4_Reasoning";
-    case "gpt-5.5":
-      return "Gpt_5_5_Reasoning";
-    case "gpt-5.6":
-      return "Gpt_5_6_Reasoning";
-    default:
-      return "Gpt_5_5_Reasoning";
-  }
+  return new Error(
+    `unsupported model "${(model ?? "").trim()}"; add it to the model mappings in the console`
+  );
 }
 
 function configuredModelSpecs(mappings: ModelMapping[]): ModelSpec[] {
-  const models = [...GATEWAY_MODELS];
-  for (const mapping of mappings) {
-    const spec: ModelSpec = {
-      id: (mapping.publicModel ?? "").trim(),
-      owner: "microsoft-365",
-      displayName: (mapping.displayName ?? "").trim(),
-      defaultReasoningLevel: (mapping.defaultReasoningLevel ?? "").trim(),
-    };
-    let replaced = false;
-    for (let i = 0; i < models.length; i++) {
-      if (models[i].id.toLowerCase() === spec.id.toLowerCase()) {
-        models[i] = spec;
-        replaced = true;
-        break;
-      }
-    }
-    if (!replaced) models.push(spec);
-  }
-  return models;
+  // Mapping table only: deleting a row removes the model from /v1/models too.
+  return mappings.map((mapping) => ({
+    id: (mapping.publicModel ?? "").trim(),
+    owner: "microsoft-365",
+    displayName: (mapping.displayName ?? "").trim(),
+    defaultReasoningLevel: (mapping.defaultReasoningLevel ?? "").trim(),
+  }));
 }
 
 // Port of modelCatalog (Codex-style entries).

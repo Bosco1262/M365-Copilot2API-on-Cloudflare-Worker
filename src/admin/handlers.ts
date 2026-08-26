@@ -524,9 +524,14 @@ export async function handleAdminModelSync(ctx: HandlerCtx): Promise<Response> {
   // endpoint always answers within ~31s so the console button never appears
   // dead.
   const tones = await Promise.race([
-    fetchUpstreamTones(),
+    fetchUpstreamTonesAll(ctx),
     new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 31_000)),
   ]);
+  // Persist fetched tones until the next successful sync overwrites them.
+  if (tones.length > 0) {
+    const s = await settingsStore.getSettings(ctx.env);
+    await settingsStore.saveSettings(ctx.env, { ...s, discoveredTones: tones });
+  }
   return jsonOut({ synced: tones.length > 0, upstream_tones: tones, count: tones.length });
 }
 
@@ -546,10 +551,74 @@ async function fetchUpstreamTones(): Promise<string[]> {
     { signal: AbortSignal.timeout(15_000) }
   );
   const bundle = await bundleResp.text();
-  const toneRe = /(?:Gpt_[0-9]_[0-9]_[A-Za-z_]+|Claude_[A-Za-z0-9_]+|Magic)/g;
+  return extractTones(bundle);
+}
+
+// Authenticated fallback: the tone-bearing SPA bundle only loads for signed-in
+// sessions now, so retry the app pages with an account pool token attached.
+// Best-effort — any failure simply yields no additional tones.
+async function fetchUpstreamTonesAuthed(ctx: HandlerCtx): Promise<string[]> {
+  let accessToken = "";
+  try {
+    const { resolveAccount } = await import("../pipeline/account");
+    const acc = await resolveAccount(ctx.env, "");
+    accessToken = acc.accessToken;
+  } catch {
+    return [];
+  }
+  if (!accessToken) return [];
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${accessToken}`,
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
+    accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+  };
+  const pages = [
+    "https://m365.cloud.microsoft/chat",
+    "https://m365.cloud.microsoft/",
+  ];
+  for (const u of pages) {
+    try {
+      const r = await fetch(u, { headers, signal: AbortSignal.timeout(7_000), redirect: "follow" });
+      if (!r.ok) continue;
+      const html = await r.text();
+      const direct = extractTones(html);
+      if (direct.length) return direct;
+      // Scan referenced bundles, preferring main/midgard ones.
+      const urls = [...new Set(html.match(/https:\/\/[^\s"']+?\.js\b/g) ?? [])];
+      urls.sort((a, b) => Number(b.includes("midgard") || /main\./.test(b)) - Number(a.includes("midgard") || /main\./.test(a)));
+      for (const bu of urls.slice(0, 4)) {
+        try {
+          const br = await fetch(bu, { headers, signal: AbortSignal.timeout(7_000) });
+          if (!br.ok) continue;
+          const found = extractTones(await br.text());
+          if (found.length) return found;
+        } catch {}
+      }
+    } catch {}
+  }
+  return [];
+}
+
+function extractTones(text: string): string[] {
   const seen = new Set<string>();
-  for (const t of bundle.match(toneRe) ?? []) seen.add(t);
+  for (const t of text.match(/(?:Gpt_[0-9]_[0-9]_[A-Za-z_]+|Claude_[A-Za-z0-9_]+|Magic)/g) ?? []) seen.add(t);
   return [...seen].sort();
+}
+
+// Tries anonymous scraping first, then the authenticated fallback while the
+// overall 31s sync budget still allows it.
+async function fetchUpstreamTonesAll(ctx: HandlerCtx): Promise<string[]> {
+  const started = Date.now();
+  try {
+    const anon = await fetchUpstreamTones();
+    if (anon.length) return anon;
+  } catch {}
+  if (Date.now() - started < 15_000) {
+    try {
+      return await fetchUpstreamTonesAuthed(ctx);
+    } catch {}
+  }
+  return [];
 }
 
 export async function handleAdminModelTest(ctx: HandlerCtx): Promise<Response> {
@@ -557,16 +626,25 @@ export async function handleAdminModelTest(ctx: HandlerCtx): Promise<Response> {
     return writeOpenAIError(405, "invalid_request_error", "method not allowed");
   }
   let model = "";
+  let toneOverride = "";
   try {
-    const b = (await ctx.req.json()) as { model?: string };
+    const b = (await ctx.req.json()) as { model?: string; tone?: string };
     model = (b.model ?? "").trim();
+    toneOverride = (b.tone ?? "").trim();
   } catch {
     return writeOpenAIError(400, "invalid_request_error", "bad json: model required");
   }
   if (!model) return writeOpenAIError(400, "invalid_request_error", "bad json: model required");
 
   const settings = await settingsStore.getSettings(ctx.env);
-  const toneOrErr = reasoningTone(model, "", settings);
+  let toneOrErr: string | Error;
+  if (toneOverride) {
+    toneOrErr = /^[A-Za-z0-9_]{1,128}$/.test(toneOverride)
+      ? toneOverride
+      : new Error(`unsupported tone: ${toneOverride}`);
+  } else {
+    toneOrErr = reasoningTone(model, "", settings);
+  }
   if (toneOrErr instanceof Error) {
     return writeOpenAIError(400, "invalid_request_error", toneOrErr.message);
   }

@@ -1,6 +1,7 @@
 # 移植完整度对比报告：M365-Copilot2API-on-Cloudflare-Worker vs 上游 M365-Copilot2API
 
 > 对照基准：上游 `internal/` 全部 Go 源文件、`server.go Routes()` 全部路由、README 功能表。
+> 最近全面核对：2026-08-26（含严格映射路由、tone 同步鉴权回退、KV 持久化等行为变更）。
 > 本文档逐项列出实现状态；未实现项均标注原因分类：
 > **[平台]** Workers 运行时能力限制（已确认裁剪）｜ **[简化]** 行为等价但实现方式适配 Workers/KV ｜ **[未做]** 尚未移植（技术上可行）｜ **[上游死代码]** 上游存在但未被任何路由调用
 
@@ -12,7 +13,7 @@
 
 | 上游端点 | 状态 | 说明 |
 |---|---|---|
-| `POST /v1/chat/completions` | ✅ 完整 | 流式+非流式、reasoning_content、function calling（router 规划/fenced/native 检测/schema 校验信任边界/流式参数分片）、多模态图片上传、会话复用增量发送、failover、tone 回退、内容策略拦截、工具拒答/沙盒幻觉纠偏 |
+| `POST /v1/chat/completions` | ✅ 完整 | 流式+非流式、reasoning_content、function calling（router 规划/fenced/native 检测/schema 校验信任边界/流式参数分片）、多模态图片上传、会话复用增量发送、failover、内容策略拦截、工具拒答/沙盒幻觉纠偏。**模型路由差异**：上游未映射时内置表回退+effort 自动升级（未知模型默认升 Gpt_5_5_Reasoning）；Worker 版严格按映射表执行，未映射直接 400 [应用户要求] |
 | `GET /v1/models` | ✅ 完整 | Codex 风格目录全字段，`data`+`models` 双别名 |
 | `POST /v1/responses` | ⚠️ 功能等价 | instructions/input 全项转换、previous_response_id 历史（KV 1h TTL）、function_call 投影、SSE 事件序列。**差异**：流式为"完成后事件重放"而非逐字增量转换 [简化]；usage 为启发式估算非 tiktoken o200k [简化]；`function_call_progress` 项无条件跳过（上游解析成功才跳过）[简化] |
 | `POST /v1/messages` (Anthropic) | ✅ 增强 | system/块转换、thinking/tool_use block。**流式为真增量**（ChatHub onDelta/onReasoning 直接映射 thinking_delta/text_delta，含工具围栏扣留与 tool_use 块切换），优于上游的"完成后重放"实现 |
@@ -23,19 +24,21 @@
 | `POST /v1/sessions` | ✅ 完整 | session_id 查询/创建语义一致 |
 | `DELETE /v1/sessions/{id}` | ✅ 完整 | |
 | `/v1/mcp/sse` · `/v1/mcp/message` · `/v1/mcp/tools` | ❌ 未移植 | **[平台+未做]** MCP stdio 传输依赖子进程，Workers 无进程概念（已确认裁剪）；SSE 传输技术上可移植，尚未排期 |
+| `/v1/memory/flags` · `/instructions(+/id)` · `/settings` | ❌ 未移植 | **[未做]** 上游 memoryV2 功能族（用户记忆指令管理）；Worker 版 settings 无 FeatureFlags 字段 |
+| `GET /api/plugins` | ❌ 未移植 | **[未做]** 上游插件清单端点（配合 native 规划模式；该模式本身亦未移植） |
 
 ### /api/* 管理端点
 
 | 上游端点 | 状态 | 说明 |
 |---|---|---|
-| `POST /api/admin/login` | ✅ 完整 | 密码 SHA-256 存 KV（上游明文文件，更安全）。**差异**：失败锁定为 isolate 内存态（5 次/15min），跨 isolate 不共享 [简化] |
+| `POST /api/admin/login` | ✅ 完整 | 密码 SHA-256 哈希存 KV。**差异**：上游为 bcrypt 哈希 + zxcvbn 强度校验（M_REQUIRE_STRONG_ADMIN_PASSWORD）+ 密码历史；Worker 版无强度/历史策略，失败锁定为 isolate 内存态（5 次/15min），跨 isolate 不共享 [简化] |
 | `/api/admin/logout` · `/api/admin/session` | ✅ 完整 | |
 | `POST /api/admin/change-password` | ✅ 完整 | 含强制改密门禁、全会话失效 |
 | `/api/admin/keys` GET/POST/PUT/DELETE | ✅ 完整 | 仅哈希存储、回读语义一致 |
 | `GET /api/admin/models` | ✅ 完整 | |
 | `POST /api/admin/models/test` | ✅ 完整 | 真实 ChatHub 连通测试，走管理员会话鉴权 |
-| `POST /api/admin/models/sync` | ⚠️ 部分 | CDN bundle tone 探测已移植；但探测结果未接入设置校验的合法 tone 白名单（校验仍用静态 KNOWN_UPSTREAM_TONES）[简化] |
-| `GET/PUT /api/admin/settings` | ⚠️ 部分 | 校验规则完整移植。**缺口**：OAuth 相关字段（clientId/authority/redirectUri/scope）保存后**不生效**——上游通过 ApplyStartupSettingsEnv 在启动时把持久化设置灌入环境变量，Workers 的绑定变量在部署时固定，控制台修改无法覆盖 [未做，可通过 wrangler vars 解决]；listenAddress/configPath/tokenCachePath/debugLogPath 等字段在 Workers 上天然无效 [平台] |
+| `POST /api/admin/models/sync` | ✅ 完整 | 两级探测：匿名 CDN bundle 正则 → 失败时用账号池 accessToken 以 Bearer 重试应用页面及其 bundle（已实测可拉取）。非空结果持久化到 KV `discoveredTones`，保留至下次成功同步覆盖。**与上游差异**：上游结果仅存内存（24h TTL+后台自动重同步，重启即失），校验走动态白名单（liveUpstreamTones 动态优先、回退内置 13 个含 Magic/Gpt_5_2_Auto）；Worker 版无白名单、纯格式校验、KV 持久化、手动覆盖 |
+| `GET/PUT /api/admin/settings` | ⚠️ 部分 | 校验规则基本移植。**行为差异**：上游允许空 modelMappings，Worker 版要求至少一条；tone 校验上游为动态白名单、Worker 为纯格式。**缺口**：OAuth 相关字段（clientId/authority/redirectUri/scope）保存后**不生效**——上游通过 ApplyStartupSettingsEnv 在启动时把持久化设置灌入环境变量，Workers 的绑定变量在部署时固定，控制台修改无法覆盖 [未做，可通过 wrangler vars 解决]；listenAddress/configPath/tokenCachePath/debugLogPath 等字段在 Workers 上天然无效 [平台]；licenseType/scenario/AccountConcurrencyLimit/FeatureFlags（M365_ENABLE_* 8 项）字段未移植 |
 | `/api/admin/proxy-pool` | ❌ 已移除 | **[平台→已删除]** Workers fetch 不支持 HTTP/SOCKS 出站代理；应用户要求已彻底移除端点（控制台对应操作将收到 404） |
 | `/api/accounts/bind-proxy` | ❌ 已移除 | 同上 |
 | `/api/admin/deployments` · `/deployment` · `/deployment/check` | ❌ 占位 | Codex 反向代理部署管理。**原因**：依赖本地文件持久化与自定义反代 URL 管理，与 Worker 无状态模型冲突；控制台对应页签不可用 [未做] |
@@ -106,7 +109,7 @@
 | validateToolConversation（tool 消息格式前置校验） | ❌ 未移植 | **[未做]** 格式异常消息会进入 flatten 渲染而非 400 拒绝 |
 | 工具进度卡（tool_progress.go parseToolProgress + Progress 事件转发） | ⚠️ 部分 | Responses 转换无条件跳过该类项；聊天流内 Progress 事件不透传（上游在 chatStream 语义事件里透传——该部分已移植） |
 | Codex 模型目录（capabilities 双位置/effort 预设/truncation policy 等 60+ 字段） | ✅ 完整 | |
-| 动态 tone 探测（CDN main.*.js 正则抓取） | ⚠️ 部分 | sync 接口可用；未接入目录/校验白名单（见路由表） |
+| 动态 tone 探测（CDN main.*.js 正则抓取） | ✅ 增强 | 匿名 + 鉴权两级探测；结果持久化并接入控制台模型映射下拉框（默认/拉取分组）。**差异**：上游为内存缓存+动态白名单校验；Worker 为 KV 持久化+纯格式校验。**路由差异**：上游内置表回退+effort 自动升级，Worker 严格映射表驱动（未映射 400、删除行即失效）[应用户要求] |
 | 用量估算 EstimateTokens（rune×2/3） | ✅ 完整 | |
 | Codex usage tiktoken o200k | ⚠️ 启发式 | Worker 不内置词表；heuristic_character_estimate 口径，m365.usage_source 如实标注 [简化] |
 | public_identity 公开身份策略（M365_PUBLIC_IDENTITY_POLICY 总开关、身份预设、正文/推理/流式清洗器） | ❌ 未移植 | **[未做]** 上游默认关闭的可选特性（20KB），面向公开反代场景清洗微软痕迹；个人自部署收益低 |
@@ -122,6 +125,8 @@
 | httpTrace 访问日志中间件 | ❌ 未移植 | **[未做]** Workers 自带请求日志（wrangler tail / dashboard）覆盖同一需求 |
 | recover 中间件 | ✅ 等价 | fetch 入口 try/catch 500 JSON |
 | 数据文件原子写（atomicfile 0600） | — | **[平台]** KV 无文件语义；敏感数据仅存哈希或服务端密文边界内 |
+| refresh token 落盘加密（auth/cache.go AES-GCM，M365_MASTER_KEY） | ❌ 差异 | **[未做]** Worker 版账号 token（含 access/refresh）以明文 JSON 存 KV（`src/store/accounts.ts`），依赖 KV 边界安全；上游落盘前 AES-GCM 加密 |
+| 默认模型映射（defaultModelMappings：gpt-5.6-sol/-terra/-luna） | ⚠️ 不同 | 上游默认 3 条 sol/terra/luna → Gpt_5_6_Reasoning；Worker 版默认展开全部 11 个内置模型（含 gpt-image-2→Magic），控制台可直接编辑 [应用户要求] |
 | 后台落盘循环 persistStore | — | **[平台]** KV 即时写替代 |
 | graceful shutdown | — | **[平台]** 无常驻进程概念 |
 | manage.py / Dockerfile / docker-compose | — | 由 wrangler dev/deploy 替代 |
@@ -155,6 +160,7 @@
 | 控制台页签/功能 | 影响 |
 |---|---|
 | 登录/改密/仪表盘/账号/API Keys/用量/缓存统计/模型测试/设置（运行时字段） | ✅ 可用 |
+| 「模型管理」页（映射+可用性测试合一） | ✅ 增强 | 上游无映射编辑 UI（只能裸调 PUT settings），仅有独立"Model Test"单表；Worker 版为映射编辑+行内测试+状态/延迟/回复一体的合并表格 |
 | 「对话」页列表+删除 | ✅ 可用（列表不含 gateway 合并行，查看器详情按钮打开后无历史内容） |
 | 「对话」页查看器详情（conversation.html?id=） | ⚠️ 打开但无消息内容（detail 端点占位） |
 | 「代理池」页 | ✅ 已彻底移除：导航入口、页面区块、账号表 Proxy 列/Bind 按钮、相关 JS 函数与 showPage 钩子均从 `assets/index.html` 删除（内联脚本通过 node --check 校验）；i18n 词典残留少量不可见死键，不影响任何功能 |

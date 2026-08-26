@@ -1835,7 +1835,7 @@ background: #d9a600;
                 align-items: center;
                 gap: 5px;
               " data-i18n="top.running"><span class="status-dot"></span> Running</span>
-            <button data-i18n="top.logout" class="btn" onclick="logout()">Log out</button>
+            <button data-i18n="top.logout" class="btn" onclick="logout()">Log Out</button>
           </div>
         </header>
 
@@ -1864,7 +1864,7 @@ background: #d9a600;
                 <div class="onb-head-actions">
                   <button class="btn" onclick="toggleOnboarding()" data-i18n="onb.hide">
                     <i data-lucide="chevron-up" style="width: 14px; height: 14px"></i>
-                    Hide guide
+                    Hide Guide
                   </button>
                 </div>
               </div>
@@ -2022,7 +2022,7 @@ background: #d9a600;
             <div class="card">
               <div class="card-head">
                 <span data-i18n="req.recent" class="card-title">Recent Requests</span><button data-i18n="req.viewAll" class="btn btn-sm" onclick="showPage('usage')">
-                  View all
+                  View All
                 </button>
               </div>
               <table class="table">
@@ -2151,7 +2151,7 @@ background: #d9a600;
                   <div class="onb-step">
                     <span class="onb-step-num">1</span>
                     <span class="onb-step-icon"><i data-lucide="mouse-pointer-click" style="width: 15px; height: 15px"></i></span>
-                    <span class="onb-step-text"><b data-i18n="oauth.s1">Click "Start authorization" below</b>
+                    <span class="onb-step-text"><b data-i18n="oauth.s1">Click "Start Authorization" below</b>
                       <p data-i18n="oauth.s1d">A popup window will open the Microsoft sign-in page. Sign in there and return to this page.</p></span>
                   </div>
                   <div class="onb-step">
@@ -2164,12 +2164,12 @@ background: #d9a600;
                     <span class="onb-step-num">3</span>
                     <span class="onb-step-icon"><i data-lucide="check-check" style="width: 15px; height: 15px"></i></span>
                     <span class="onb-step-text"><b data-i18n="oauth.s3">Paste and confirm</b>
-                      <p data-i18n="oauth.s3d">Paste it into the "Callback URL" input below, then click "Confirm and add" to finish authorization.</p></span>
+                      <p data-i18n="oauth.s3d">Paste it into the "Callback URL" input below, then click "Confirm And Add" to finish authorization.</p></span>
                   </div>
                 </div>
                 <button class="btn primary" onclick="startPKCE()" style="width: 100%; margin-bottom: 12px" data-i18n="oauth.startBtn">
                   <i data-lucide="link" style="width: 15px; height: 15px"></i>
-                  Start authorization
+                  Start Authorization
                 </button>
                 <div class="highlight-box warning" style="margin-top: 0; margin-bottom: 16px">
                   <div class="highlight-box-title">
@@ -2181,7 +2181,7 @@ background: #d9a600;
                 <div class="copy-field">
                   <input class="form-input" id="callbackInput" data-i18n-placeholder="acc.callbackPh" placeholder="Paste the full callback URL, e.g. http://localhost:4141/api/auth/callback?code=M.C5...&amp;state=abc123" autocomplete="off">
                   <button data-i18n="oauth.confirmAdd" class="btn primary" onclick="submitCallback()" style="min-width: 96px">
-                    Confirm and add
+                    Confirm And Add
                   </button>
                 </div>
                 <div id="authStatus" style="margin-top: 12px"></div>
@@ -2236,7 +2236,7 @@ background: #d9a600;
                 <p data-i18n="keys.manage" class="page-sub">Manage Access Keys</p>
               </div>
               <button data-i18n="keys.createTitle" class="btn primary" onclick="openKeyModal()">
-                Create key
+                Create Key
               </button>
             </div>
             <div class="card">
@@ -2272,7 +2272,7 @@ background: #d9a600;
               </div>
               <div style="display: flex; gap: 8px">
                 <button data-i18n="conv.cleanAll" class="btn danger" onclick="cleanupAll()">
-                  Clean up all
+                  Clean Up All
                 </button>
               </div>
             </div>
@@ -2321,35 +2321,21 @@ background: #d9a600;
               </div>
               <div style="display:flex;gap:8px"><button id="syncBtn" class="btn" onclick="syncModels()" data-i18n="mm.syncBtn">
                 <i data-lucide="refresh-cw" style="width: 14px; height: 14px"></i>
-                Sync tones
+                Sync Tones
               </button>
               <button class="btn primary" onclick="modelTestAll()" data-i18n="mm.testAllBtn">
                 <i data-lucide="play" style="width: 14px; height: 14px"></i>
-                Test all
+                Test All
               </button></div>
             </div>
             <div class="card">
-<div class="card-head"><span class="card-title" data-i18n="map.title">Model Mappings</span></div>
+<div class="card-head"><span class="card-title" data-i18n="map.title">Model Mappings &amp; Availability</span></div>
 <div class="card-body">
-<p class="form-hint" style="margin-bottom:10px" data-i18n="map.hint">Route public model names to upstream tones. 将公开模型名映射到上游 tone；命中后优先于内置表。</p>
-<table class="table"><thead><tr><th data-i18n="map.th.id">Public Model ID</th><th data-i18n="map.th.tone">Upstream Tone</th><th data-i18n="map.th.name">Display Name</th><th data-i18n="map.th.level">Default Reasoning</th><th></th></tr></thead><tbody id="mappingRows"></tbody></table>
-<div style="margin-top:12px;display:flex;gap:8px"><button class="btn" onclick="addMappingRow()" data-i18n="map.add">+ Add</button><button class="btn primary" onclick="saveModelMappings()" data-i18n="map.save">Save mappings</button></div></div>
-<div class="card-head" style="border-top:1px solid rgba(128,128,128,.25)"><span class="card-title" data-i18n="avail.title">Availability Test</span></div>
-<table class="table">
-                <thead>
-                  <tr>
-                    <th data-i18n="avail.th.model">Model</th>
-                    <th data-i18n="avail.th.status">Status</th>
-                    <th data-i18n="avail.th.latency">Latency</th>
-                    <th data-i18n="avail.th.reply">Reply</th>
-                  </tr>
-                </thead>
-                <tbody id="modelTestRows">
-                  <tr>
-                    <td data-i18n="common.loading" colspan="4" class="empty">Loading...</td>
-                  </tr>
-                </tbody>
-              </table>
+<p class="form-hint" style="margin-bottom:10px" data-i18n="map.hint">Route public model names to upstream tones; mappings take priority over built-ins. Test each row with the tone currently entered — no need to save first.</p>
+<div style="overflow-x:auto">
+<table class="table"><thead><tr><th data-i18n="map.th.id">Public Model ID</th><th data-i18n="map.th.tone">Upstream Tone</th><th data-i18n="map.th.name">Display Name</th><th data-i18n="map.th.level">Default Reasoning</th><th data-i18n="avail.th.status">Status</th><th data-i18n="avail.th.latency">Latency</th><th data-i18n="avail.th.reply">Reply</th><th></th></tr></thead><tbody id="mappingRows"></tbody></table>
+</div>
+<div style="margin-top:12px;display:flex;gap:8px"><button class="btn" onclick="addMappingRow()" data-i18n="map.add">+ Add</button><button class="btn primary" onclick="saveModelMappings()" data-i18n="map.save">Save Mappings</button></div></div>
 </div>
 </section>
 
@@ -2369,7 +2355,7 @@ background: #d9a600;
                       flex-wrap: wrap;
                     ">
                     <span id="pwSourceBadge" class="status"><i></i>Loading...</span><button data-i18n="pw.change" class="btn" onclick="openChangePassword()">
-                      Change password
+                      Change Password
                     </button>
                   </div>
                   <p class="form-hint" data-i18n="pw.storage.hint">Secret = provided by ADMIN_PASSWORD (wrangler secret); KV = saved after changing it here.</p>
@@ -2388,7 +2374,7 @@ background: #d9a600;
                 </div>
                 <div style="margin-top: 16px">
                   <button data-i18n="settings.save" class="btn primary" onclick="saveSettings()">
-                    Save settings
+                    Save Settings
                   </button>
                 </div>
               </div>
@@ -2493,20 +2479,24 @@ window.I18N_DICT={
   "conv.subtitle": "Local conversation bindings and cloud cleanup.",
   "mm.subtitle": "Sync upstream tones, edit model mappings, and verify availability.",
   "settings.subtitle": "Runtime options stored in KV.",
-  "mm.sync": "Sync tones",
+  "mm.sync": "Sync Tones",
   "mm.syncing": "Syncing...",
-  "mm.testAll": "Test all",
-  "map.title": "Model Mappings",
-  "map.hint": "Route public model names to upstream tones; mappings take priority over built-ins.",
+  "mm.testAll": "Test All",
+  "map.title": "Model Mappings & Availability",
+  "map.hint": "Route public model names to upstream tones; mappings take priority over built-ins. Test each row with the tone currently entered — no need to save first.",
   "map.add": "+ Add",
-  "map.save": "Save mappings",
+  "map.save": "Save Mappings",
+  "map.test": "Test",
+  "map.err.noId": "Enter a public model ID first",
+  "map.err.required": "All fields are required per row. Row {row} missing: {fields}",
+  "map.opt.defaults": "--- Default Tones",
+  "map.opt.fetched": "--- Fetched Tones",
+  "berr.noMappings": "At least one model mapping is required",
+  "sync.persisted": "(saved {n} fetched tones)",
   "map.th.id": "Public Model ID",
   "map.th.tone": "Upstream Tone",
   "map.th.name": "Display Name",
   "map.th.level": "Default Reasoning",
-  "avail.title": "Availability Test",
-  "avail.loading": "Loading...",
-  "avail.th.model": "Model",
   "avail.th.status": "Status",
   "avail.th.latency": "Latency",
   "avail.th.reply": "Reply",
@@ -2514,8 +2504,8 @@ window.I18N_DICT={
   "pw.storage.hint": "Secret = provided by ADMIN_PASSWORD (wrangler secret); KV = saved after changing it here.",
   "pw.badge.secret": "Secret (ADMIN_PASSWORD)",
   "pw.badge.kv": "KV (console)",
-  "pw.change": "Change password",
-  "pw.modal.title": "Change password",
+  "pw.change": "Change Password",
+  "pw.modal.title": "Change Password",
   "pw.current": "Current password",
   "pw.new": "New password",
   "pw.confirm": "Confirm new password",
@@ -2529,7 +2519,7 @@ window.I18N_DICT={
   "sync.fail": "Sync failed",
   "settings.timeout": "Chat Timeout (seconds)",
   "settings.languageHint": "Choose the language used by the administration console.",
-  "settings.save": "Save settings",
+  "settings.save": "Save Settings",
   "api.noAccounts": "No M365 account yet — authorize one on the Accounts page first.",
   "mm.title": "Model Management",
   "settings.title": "Settings",
@@ -2547,16 +2537,16 @@ window.I18N_DICT={
   "nav.management": "Management",
   "nav.system": "System",
   "top.running": "Running",
-  "top.logout": "Log out",
+  "top.logout": "Log Out",
   "idx.login.admin": "Administrator Login",
   "idx.login.password": "Password",
   "idx.login.placeholder": "Enter administrator password",
   "idx.login.hint": "The default password is <code>admin123</code>. Change it right after the first login.",
-  "idx.login.submit": "Log in",
+  "idx.login.submit": "Log In",
   "onb.kicker": "Getting Started",
   "onb.title": "Start using your API gateway in a few steps",
   "onb.desc": "Add a Microsoft account and create an API key to chat through the OpenAI-compatible API.",
-  "onb.hide": "Hide guide",
+  "onb.hide": "Hide Guide",
   "onb.s1": "Add a Microsoft Account",
   "onb.s1.desc": "Authorize a Microsoft account and add it to the available pool",
   "onb.s2": "Create an API Key",
@@ -2582,7 +2572,7 @@ window.I18N_DICT={
   "qa.clean": "Clean Conversations",
   "qa.cleanDesc": "Delete conversations you no longer need",
   "req.recent": "Recent Requests",
-  "req.viewAll": "View all",
+  "req.viewAll": "View All",
   "th.time": "Time",
   "th.model": "Model",
   "th.endpoint": "Endpoint",
@@ -2671,25 +2661,25 @@ window.I18N_DICT={
   "u.ov.last24Label": "Last 24 hours",
   "u.ov.reqCountLabel": "Request count",
   "u.ov.cacheHitsLabel": "Cache hits",
-  "oauth.startBtn": "Start authorization",
-  "mm.syncBtn": "Sync tones",
-  "mm.testAllBtn": "Test all",
+  "oauth.startBtn": "Start Authorization",
+  "mm.syncBtn": "Sync Tones",
+  "mm.testAllBtn": "Test All",
   "common.createBtn": "Create",
   "onb.keyLabel": "API Key",
   "u.allTime": "All-time usage",
   "acc.subtitle": "Authorize and manage Microsoft accounts",
-  "conv.cleanAll": "Clean up all",
-  "keys.createTitle": "Create key",
+  "conv.cleanAll": "Clean Up All",
+  "keys.createTitle": "Create Key",
   "keyModal.hint": "Used to authenticate requests to the OpenAI / Anthropic-compatible endpoints. The full key is shown only once — copy it now.",
   "keyName.ph": "A label for this key (e.g. \"my-laptop\", \"claude-code\")",
   "filter.all": "All",
   "acc.search": "Search accounts…",
-  "oauth.s1": "Click \"Start authorization\" below",
+  "oauth.s1": "Click \"Start Authorization\" below",
   "oauth.s1d": "A popup window will open the Microsoft sign-in page. Sign in there and return to this page.",
   "oauth.s2": "Copy the callback URL from the popup address bar",
   "oauth.s2d": "After signing in the popup may look blank or error out — that is normal. Copy the full URL (including <code>code=...</code> and <code>state=...</code>) from the popup address bar.",
   "oauth.s3": "Paste and confirm",
-  "oauth.s3d": "Paste it into the \"Callback URL\" input below, then click \"Confirm and add\" to finish authorization.",
+  "oauth.s3d": "Paste it into the \"Callback URL\" input below, then click \"Confirm And Add\" to finish authorization.",
   "oauth.warnT": "You must paste the callback URL manually to finish authorization",
   "oauth.warnB": "After signing in, the popup shows a blank or error page — <strong>this is normal</strong>, because the callback endpoint is not a real website. Authorization is <strong>not</strong> complete yet. Copy the <strong>full URL</strong> from the popup address bar (like <code>http://localhost:4141/api/auth/callback?code=M.C5...&amp;state=abc123</code>) and paste it into the \"Callback URL\" input below.",
   "th.tokens": "Tokens",
@@ -2697,15 +2687,15 @@ window.I18N_DICT={
   "state.enable": "Enable",
   "state.disable": "Disable",
   "acc.cooldownUntil": "Cooldown until",
-  "oauth.start": "Start authorization",
-  "oauth.confirmAdd": "Confirm and add",
+  "oauth.start": "Start Authorization",
+  "oauth.confirmAdd": "Confirm And Add",
   "u.requestsToday": "{n} requests today",
   "u.todayPlus": "Today +{n}",
   "u.inOut": "Input {a} · Output {b}",
   "ug.page": "Page {p} / {t} · {n} Total",
   "settings.language": "Language",
   "oauth.blockedT": "Popup blocked by the browser",
-  "oauth.blockedD": "Please allow popups for this site, then click \"Start authorization\" again.",
+  "oauth.blockedD": "Please allow popups for this site, then click \"Start Authorization\" again.",
   "oauth.openedT": "Authorization page opened in a new window",
   "oauth.openedD": "Sign in inside the popup. After signing in the popup may look blank or error out — that is normal. Copy the <b>full URL</b> from the popup address bar and paste it into the \"Callback URL\" input below.",
   "oauth.pastePh": "Paste the full callback URL from the popup address bar…",
@@ -2735,9 +2725,7 @@ window.I18N_DICT={
   "clean.starting": "Starting cleanup of all conversations…",
   "clean.listFail": "Failed to list conversations: {m}",
   "clean.done": "Cleanup finished",
-  "mm.clickTestAll": "Click \"Test all\"",
   "mm.emptyReply": "(empty reply)",
-  "mm.loadFirst": "Load the model list first",
   "mm.testDone": "Model tests finished",
   "chart.noTrend": "No trend data yet; it will appear after requests are made.",
   "u.reqCount": "{n} req"
@@ -2766,17 +2754,21 @@ window.I18N_DICT={
   "mm.sync": "同步 tone",
   "mm.syncing": "同步中...",
   "mm.testAll": "全部测试",
-  "map.title": "模型映射",
-  "map.hint": "将公开模型名映射到上游 tone；命中后优先于内置表。",
+  "map.title": "模型映射与可用性测试",
+  "map.hint": "将公开模型名映射到上游 tone；命中后优先于内置表。每行可直接按当前填写的 tone 测试，无需先保存。",
   "map.add": "+ 添加",
   "map.save": "保存映射",
+  "map.test": "测试",
+  "map.err.noId": "请先填写公开模型 ID",
+  "map.err.required": "每行所有字段必填。第 {row} 行缺少：{fields}",
+  "map.opt.defaults": "--- 默认 Tones",
+  "map.opt.fetched": "--- 手动拉取 Tones",
+  "berr.noMappings": "至少需要配置一条模型映射",
+  "sync.persisted": "(已保存拉取的 {n} 个 tone)",
   "map.th.id": "公开模型 ID",
   "map.th.tone": "上游 tone",
   "map.th.name": "显示名称",
   "map.th.level": "默认推理级别",
-  "avail.title": "可用性测试",
-  "avail.loading": "加载中...",
-  "avail.th.model": "模型",
   "avail.th.status": "状态",
   "avail.th.latency": "延迟",
   "avail.th.reply": "回复",
@@ -3005,9 +2997,7 @@ window.I18N_DICT={
   "clean.starting": "开始清理所有对话…",
   "clean.listFail": "获取对话列表失败：{m}",
   "clean.done": "清理完成",
-  "mm.clickTestAll": "点击“测试全部”",
   "mm.emptyReply": "（空回复）",
-  "mm.loadFirst": "请先加载模型列表",
   "mm.testDone": "模型测试完成",
   "chart.noTrend": "暂无趋势数据，发起请求后将在此显示。",
   "u.reqCount": "{n} 次"
@@ -3021,6 +3011,7 @@ window.I18N_DICT={
       const $=id=>document.getElementById(id);
       const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',modeltest:'Model Management',settings:'Settings'};
 const BACKEND_MSG_MAP=[
+[/^至少需要配置一条模型映射$/, 'berr.noMappings'],
 [/^每轮工具调用数必须为 1-64$/, 'berr.toolCalls'],
 [/^最大工具轮次必须为 1-512$/, 'berr.rounds'],
 [/^上下文窗口不能小于 1024$/, 'berr.window'],
@@ -3062,7 +3053,7 @@ return msg;
         if(p==='accounts')loadAccounts();
         if(p==='apikeys')loadKeys();
         if(p==='conversations')loadConversations();
-        if(p==='modeltest'){loadModelTest();loadModelMappings();}
+        if(p==='modeltest'){loadModelMappings();}
         if(p==='settings')loadSettings();
       }
 
@@ -3578,24 +3569,38 @@ document.addEventListener('i18n:locale',()=>{try{const b=document.querySelector(
         showNotice(t('clean.done'),'success');loadConversations();
       }
 
-      async function loadModelTest(){
-        $('modelTestRows').innerHTML='<tr><td colspan="4" class="empty">Loading...</td></tr>';
-        try{
-          const d=await api('/api/admin/models');
-          const models=d.data||[];
-          if(!models.length){$('modelTestRows').innerHTML='<tr><td colspan="4" class="empty">'+t('state.noModels')+'</td></tr>';return;}
-          $('modelTestRows').innerHTML=models.map(m=>`<tr data-model="${esc(m.id)}"><td><b>${esc(m.id)}</b></td><td><span class="status"><i></i>${t('state.notTested')}</span></td><td style="font-size:12px;color:var(--muted)">-</td><td style="font-size:12px;color:var(--muted)">${t('mm.clickTestAll')}</td></tr>`).join('');
-        }catch(e){$('modelTestRows').innerHTML=`<tr><td colspan="4" class="empty">${e.message}</td></tr>`;}
-      }
-      async function modelTestOne(id,row){
-        const badge=row.querySelector('td:nth-child(2)');
-        const lat=row.querySelector('td:nth-child(3)');
-        const reply=row.querySelector('td:nth-child(4)');
+function rowValues(tr){
+const get=k=>{const el=tr.querySelector('[data-k="'+k+'"]');return el?el.value.trim():'';};
+return {publicModel:get('publicModel'),upstreamTone:get('upstreamTone'),displayName:get('displayName'),defaultReasoningLevel:get('defaultReasoningLevel')};
+}
+function rowMissing(v){
+const miss=[];
+if(!v.publicModel)miss.push(t('map.th.id'));
+if(!v.upstreamTone)miss.push(t('map.th.tone'));
+if(!v.displayName)miss.push(t('map.th.name'));
+if(!v.defaultReasoningLevel)miss.push(t('map.th.level'));
+return miss;
+}
+function rowIndex(tr){
+return [...$('mappingRows').children].indexOf(tr)+1;
+}
+async function modelTestOne(row){
+const vals=rowValues(row);
+const miss=rowMissing(vals);
+const badge=row.querySelector('.js-status');
+const lat=row.querySelector('.js-latency');
+const reply=row.querySelector('.js-reply');
+if(miss.length){
+badge.innerHTML='<span class="status offline"><i></i>'+t('state.failed')+'</span>';
+lat.textContent='-';reply.textContent=t('map.err.required',{row:String(rowIndex(row)),fields:miss.join(', ')});return;
+}
+const id=(row.dataset.model||'').trim();
+const toneSel=row.querySelector('[data-k="upstreamTone"]');
         badge.innerHTML='<span class="status"><i></i>'+t('state.testing')+'</span>';
-        lat.textContent='-';reply.textContent='';
+        lat.textContent='-';reply.textContent='-';
         const start=performance.now();
         try{
-          const d=await api('/api/admin/models/test',{method:'POST',body:JSON.stringify({model:id})});
+          const d=await api('/api/admin/models/test',{method:'POST',body:JSON.stringify({model:id,tone:toneSel?toneSel.value.trim():''})});
           const ms=Math.round(performance.now()-start);
           const content=d.reply||t('mm.emptyReply');
           badge.innerHTML='<span class="status online"><i></i>'+t('state.healthy')+'</span>';
@@ -3608,16 +3613,28 @@ document.addEventListener('i18n:locale',()=>{try{const b=document.querySelector(
         }
       }
       async function modelTestAll(){
-        const rows=[...document.querySelectorAll('#modelTestRows tr[data-model]')];
-        if(!rows.length){showNotice(t('mm.loadFirst'),'error');return;}
+        const rows=[...document.querySelectorAll('#mappingRows tr[data-model]:not([data-model=""])')];
+        if(!rows.length){showNotice(t('state.noModels'),'error');return;}
         for(let i=0;i<rows.length;i++){
-          modelTestOne(rows[i].dataset.model,rows[i]);
+          modelTestOne(rows[i]);
           await new Promise(r=>setTimeout(r,250));
         }
         showNotice(t('mm.testDone'),'success');
       }
 
             let _toneOptions=[];
+let _discoveredTones=[];
+function toneOptionsHtml(selected){
+const def=_toneOptions.filter(o=>o);
+const disc=(_discoveredTones||[]).filter(o=>o&&def.indexOf(o)===-1);
+let h='';
+if(def.length){h+='<optgroup label="'+esc(t('map.opt.defaults'))+'">'+def.map(o=>'<option'+(o===selected?' selected':'')+'>'+esc(o)+'</option>').join('')+'</optgroup>';}
+if(disc.length){h+='<optgroup label="'+esc(t('map.opt.fetched'))+'">'+disc.map(o=>'<option'+(o===selected?' selected':'')+'>'+esc(o)+'</option>').join('')+'</optgroup>';}
+return h;
+}
+function refreshToneSelects(){
+document.querySelectorAll('#mappingRows select[data-k="upstreamTone"]').forEach(sel=>{const v=sel.value;sel.innerHTML=toneOptionsHtml(v);sel.value=v;});
+}
 function renderMappings(list){
 const tb=$('mappingRows');if(!tb)return;
 tb.innerHTML='';
@@ -3628,21 +3645,30 @@ function addMappingRow(m){
 m=m||{publicModel:'',upstreamTone:'',displayName:'',defaultReasoningLevel:'medium'};
 const tb=$('mappingRows');if(!tb)return;
 const tr=document.createElement('tr');
-const toneOpts=_toneOptions.map(o=>'<option'+(o===m.upstreamTone?' selected':'')+'>'+esc(o)+'</option>').join('');
+const toneOpts=toneOptionsHtml(m.upstreamTone||'');
 const lvlOpts=['none','minimal','low','medium','high','xhigh'].map(o=>'<option'+(o===(m.defaultReasoningLevel||'medium')?' selected':'')+'>'+o+'</option>').join('');
-tr.innerHTML='<td><input class="form-input" data-k="publicModel" value="'+esc(m.publicModel||'')+'" placeholder="gpt-5.7"></td>'
+tr.innerHTML='<td><input class="form-input" data-k="publicModel" value="'+esc(m.publicModel||'')+'" placeholder="gpt-5.7" oninput="this.closest(\'tr\').dataset.model=this.value.trim()"></td>'
 +'<td><select class="form-input" data-k="upstreamTone">'+toneOpts+'</select></td>'
 +'<td><input class="form-input" data-k="displayName" value="'+esc(m.displayName||'')+'"></td>'
 +'<td><select class="form-input" data-k="defaultReasoningLevel">'+lvlOpts+'</select></td>'
-+'<td><button class="btn-sm btn danger" onclick="this.closest(\'tr\').remove()">'+t('common.delete')+'</button></td>';
++'<td class="js-status"><span class="status"><i></i>'+t('state.notTested')+'</span></td>'
++'<td class="js-latency" style="font-size:12px;color:var(--muted)">-</td>'
++'<td class="js-reply" style="font-size:12px;color:var(--muted)">-</td>'
++'<td style="white-space:nowrap"><button class="btn-sm btn" onclick="modelTestOne(this.closest(\'tr\'))">'+t('map.test')+'</button> <button class="btn-sm btn danger" onclick="this.closest(\'tr\').remove()">'+t('common.delete')+'</button></td>';
+tr.dataset.model=(m.publicModel||'').trim();
 tb.appendChild(tr);
 }
 async function saveModelMappings(){
 const rows=[...document.querySelectorAll('#mappingRows tr')];
-const list=rows.map(tr=>{
-const get=k=>{const el=tr.querySelector('[data-k="'+k+'"]');return el?el.value.trim():'';};
-return {publicModel:get('publicModel'),upstreamTone:get('upstreamTone'),displayName:get('displayName'),defaultReasoningLevel:get('defaultReasoningLevel')};
-}).filter(x=>x.publicModel!=='');
+const list=[];
+for(let i=0;i<rows.length;i++){
+const v=rowValues(rows[i]);
+if(!v.publicModel&&!v.upstreamTone&&!v.displayName)continue;
+const miss=rowMissing(v);
+if(miss.length){showNotice(t('map.err.required',{row:String(i+1),fields:miss.join(', ')}),'error');return;}
+list.push(v);
+}
+if(!list.length){showNotice(t('berr.noMappings'),'error');return;}
 try{
 await api('/api/admin/settings',{method:'PUT',body:JSON.stringify({modelMappings:list})});
 showNotice(t('map.saved'),'success');
@@ -3650,13 +3676,17 @@ loadSettings();
 }catch(e){showNotice(trBackend(e.message),'error');}
 }
 
-async function refreshPasswordSource(){
-      try{
-      const d=await api('/api/admin/session');
-      const s=d.password_source==='secret'?'secret':'kv';
-      window._pwSource=s;
+function renderPasswordSource(){
+      const s=window._pwSource==='secret'?'secret':'kv';
       const b=$('pwSourceBadge');
       if(b){b.className='status '+(s==='secret'?'warn':'online');b.innerHTML='<i></i>'+t(s==='secret'?'pw.badge.secret':'pw.badge.kv');}
+      }
+      document.addEventListener('i18n:locale',function(){if(window._pwSource)renderPasswordSource();});
+      async function refreshPasswordSource(){
+      try{
+      const d=await api('/api/admin/session');
+      window._pwSource=d.password_source==='secret'?'secret':'kv';
+      renderPasswordSource();
       }catch(e){}
       }
       let _pwModalReady=false;
@@ -3702,6 +3732,7 @@ async function refreshPasswordSource(){
 try{
 const d=await api('/api/admin/settings');
 _toneOptions=d.upstreamTones||[];
+_discoveredTones=(d.settings&&d.settings.discoveredTones)||[];
 renderMappings(d.settings.modelMappings||[]);
 }catch(e){showNotice(e.message,'error');}
 }
@@ -3715,7 +3746,9 @@ const tones=(d.upstream_tones||[]);
 if(tones.length===0){
 showNotice(t('sync.none'),'warn');
 }else{
-const list=tones.slice(0,8).join(', ')+(tones.length>8?' ...':'');showNotice(t('sync.doneHead',{n:String(tones.length),list}),'success');
+_discoveredTones=tones;
+refreshToneSelects();
+const list=tones.slice(0,8).join(', ')+(tones.length>8?' ...':'');showNotice(t('sync.doneHead',{n:String(tones.length),list})+' '+t('sync.persisted',{n:String(tones.length)}),'success');
 }
 }catch(e){showNotice(trBackend(e.message||t('sync.fail')),'error');}
 finally{if(btn){btn.disabled=false;btn.innerHTML=btn.dataset.orig||t('mm.sync');}}

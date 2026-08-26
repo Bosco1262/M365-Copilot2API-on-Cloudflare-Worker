@@ -3,7 +3,7 @@ import { sha256B64Url, estimateTokens, extractOIDTID } from "../src/util";
 import { normalizeJSONText } from "../src/pipeline/prompt";
 import { flattenPromptMessages } from "../src/pipeline/prompt";
 import { modelTone, reasoningTone, modelCatalog } from "../src/pipeline/catalog";
-import { defaultSettings, DEFAULT_MODEL_MAPPINGS } from "../src/store/settings";
+import { defaultSettings, DEFAULT_MODEL_MAPPINGS, validateSettings } from "../src/store/settings";
 
 describe("sha256B64Url (PKCE S256)", () => {
   it("matches the RFC 7636 appendix B test vector", async () => {
@@ -91,12 +91,29 @@ describe("tone routing", () => {
     expect(tone).toBe("Gpt_5_4_Chat");
   });
 
-  it("escalates to reasoning tones for higher efforts", () => {
+  it("pins mapped models to their tone regardless of effort", () => {
     const settings = defaultSettings({ "m365-copilot2api_KV": {} as never } as never);
     settings.modelMappings = [...DEFAULT_MODEL_MAPPINGS];
-    expect(reasoningTone("claude-sonnet", "high", settings)).toBe("Claude_Sonnet_Reasoning");
-    expect(reasoningTone("gpt-5.4", "high", settings)).toBe("Gpt_5_4_Reasoning");
+    expect(reasoningTone("claude-sonnet", "high", settings)).toBe("Claude_Sonnet");
+    expect(reasoningTone("gpt-5.4", "high", settings)).toBe("Gpt_5_4_Chat");
     expect(reasoningTone("gpt-5.4", "low", settings)).toBe("Gpt_5_4_Chat");
+  });
+
+  it("rejects models missing from the mapping table", () => {
+    const settings = defaultSettings({ "m365-copilot2api_KV": {} as never } as never);
+    settings.modelMappings = [];
+    expect(reasoningTone("claude-sonnet", "high", settings)).toBeInstanceOf(Error);
+    expect(reasoningTone("unknown-model", "high", settings)).toBeInstanceOf(Error);
+    expect(reasoningTone("unknown-model", "bad", settings)).toBeInstanceOf(Error);
+  });
+
+  it("drops deleted mappings from the catalog and rejects their use", () => {
+    const settings = defaultSettings({ "m365-copilot2api_KV": {} as never } as never);
+    settings.modelMappings = DEFAULT_MODEL_MAPPINGS.filter((m) => m.publicModel !== "gpt-5.4");
+    expect(reasoningTone("gpt-5.4", "", settings)).toBeInstanceOf(Error);
+    const ids = modelCatalog(settings).map((m) => m["id"]);
+    expect(ids).not.toContain("gpt-5.4");
+    expect(ids).toContain("gpt-5.2");
   });
 
   it("rejects invalid effort values", () => {
@@ -111,11 +128,38 @@ describe("modelCatalog", () => {
     settings.modelMappings = [...DEFAULT_MODEL_MAPPINGS];
     const catalog = modelCatalog(settings);
     const ids = catalog.map((m) => m["id"]);
-    expect(ids).toContain("gpt-5.6-sol");
     expect(ids).toContain("gpt-5.2");
-    const sol = catalog.find((m) => m["id"] === "gpt-5.6-sol")!;
-    expect(sol["default_reasoning_level"]).toBe("low");
-    expect((sol["capabilities"] as Record<string, unknown>)["streaming"]).toBe(true);
-    expect(typeof sol["context_window"]).toBe("number");
+    expect(ids).toContain("claude-sonnet");
+    expect(ids).toContain("gpt-image-2");
+    const gpt52 = catalog.find((m) => m["id"] === "gpt-5.2")!;
+    expect(gpt52["default_reasoning_level"]).toBe("medium");
+    expect((gpt52["capabilities"] as Record<string, unknown>)["streaming"]).toBe(true);
+    expect(typeof gpt52["context_window"]).toBe("number");
+  });
+});
+
+describe("validateSettings mappings", () => {
+  const base = () => defaultSettings({ "m365-copilot2api_KV": {} as never } as never);
+
+  it("rejects empty modelMappings", () => {
+    const s = base();
+    s.modelMappings = [];
+    expect(validateSettings(s)).toMatch(/模型映射/);
+  });
+
+  it("accepts non-whitelisted but well-formed tones", () => {
+    const s = base();
+    s.modelMappings = [
+      { publicModel: "future-model", upstreamTone: "Gpt_9_9_From_Sync", displayName: "F", defaultReasoningLevel: "medium" },
+    ];
+    expect(validateSettings(s)).toBeNull();
+  });
+
+  it("rejects malformed tones", () => {
+    const s = base();
+    s.modelMappings = [
+      { publicModel: "bad-tone", upstreamTone: "not a tone!", displayName: "B", defaultReasoningLevel: "medium" },
+    ];
+    expect(validateSettings(s)).toMatch(/tone/);
   });
 });

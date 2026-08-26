@@ -89,7 +89,7 @@ npx wrangler deploy
 curl https://<your-worker>.workers.dev/v1/chat/completions \
   -H "Authorization: Bearer m365_你的密钥" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"你好"}],"stream":true}'
+  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"你好"}],"stream":true}'
 ```
 
 对接 Claude Code / Cursor：把 `ANTHROPIC_BASE_URL` 指向 Worker 地址即可（`/v1/messages` 已支持，含 thinking/tool_use block）。对接 Codex：把 OpenAI Responses `base_url` 指向 Worker（`/v1/responses` 已支持 function calling 与 `previous_response_id`）。
