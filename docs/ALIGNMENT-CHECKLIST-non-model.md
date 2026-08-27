@@ -44,7 +44,7 @@
 |---|--------|------|--------|------|---------|
 | C1 | 数据持久化 | JSON 文件 + persistStore | KV 文档键 + D1 行（优先） | ⚠️ [平台] | **2026-08-27 storage audit 后**：D1 绑定时 api_keys/accounts/cache_stats 迁 D1 行（0003）、resolver 索引迁 D1（0004）、usage/debug 迁 D1（0001），KV 文档降级为镜像+回退（仅结构性变更写镜像）；未绑 D1 时 KV 文档即时写替代落盘循环 |
 | C2 | 敏感数据 | atomicfile 0600 + 加密 | KV/D1 边界 | [用户选择] | 见 A12；refresh token 明文存 KV 文档或 accounts 表，依赖平台边界安全——已确认选择，非待办 |
-| C3 | 用量统计 | usage.jsonl（5 万条滚动） | KV 日桶（90 天、单桶 5000 条）或 D1 usage_events | ⚠️ [简化] | Free 计划面板最多读约 30 桶；**待修：D1 分支 usage_events 无 TTL/滚动清理**（0001 迁移的 DELETE 仅 apply 时执行一次，cron 未含 usage 清理，与上游 5 万条上限不对齐） |
+| C3 | 用量统计 | usage.jsonl（5 万条滚动） | KV 日桶（90 天、单桶 5000 条）或 D1 usage_events | ⚠️ [简化] | Free 计划面板最多读约 30 桶；**已修（2026-08-27）：D1 分支 usage_events 补 cron TTL 清理**（usage.ts cleanupOld 挂 */30 调度，DELETE 90 天前，对齐上游 5 万条滚动上限语义） |
 | C4 | 调试日志 | debug.go 文件 | KV 环形（≤256KiB/条、**48h TTL**、500 条）或 D1 debug_records（7 天） | ⚠️ [简化] | 500 条上限/256KiB 截断/敏感键脱敏/仅 debug 等级捕获均对齐；流式经 tee 聚合补录 responseBody；D1 分支保留 7 天（cron DELETE） |
 | C5 | D1 可选绑定 | —（无） | migrations 0001-0004 + chatMessages.ts | 🟦 新增 | 0001 usage_events/debug_records、0002 chat_messages、0003 api_keys/accounts/cache_stats（storage audit）、0004 resolver_sessions（storage review）；各 store D1 优先 + KV 镜像/懒回填 + 未绑定自动回退 KV |
 | C6 | DO 协调（锁定/游标/信号量/刷新互斥） | 进程内 | `src/do/coordination.ts` | ✅ | COORD 绑定时跨 isolate 强一致；未绑定回退 isolate 行为 |
@@ -157,8 +157,8 @@
 ## L. 检测建议（按优先级）
 
 1. **高**：D7 云端对话列表合并解析器会话；D2/D3 TTL 旋钮
-2. **中**：I13 上游新增 settings 字段（MaxConversationMessages 未移植）；D10 批量清理；**C3 D1 分支 usage_events 补 cron TTL 清理（DELETE 90 天前，对齐上游 5 万条滚动上限语义）**
+2. **中**：I13 上游新增 settings 字段（MaxConversationMessages 未移植）；D10 批量清理
 3. **低**：H4 M365_TRACE、H5 public_identity、E4 deployments 完整化
 4. 每次部署后建议跑 `npm run check`（typecheck + vitest + i18n + wrangler dry-run）做回归
 5. **已落地（2026-08-27）**：B1 并发预筛+动态 Retry-After、B2 偏好并发检查、B3 全分类冷却+全局熔断+quotaAttempts+rateLimitCooldownSeconds、B6 并发满不进候选、B7 failover 原账号冷却、B8 MarkCall+视图字段+token-health 格式
-6. **已核实（2026-08-27）**：C1-C6 存储与状态逐项复核——C4 KV TTL 实为 48h（清单修正）、C5 migrations 已扩至 0004（清单修正）、C3 D1 分支 usage 清理缺口（新增待办）
+6. **已核实（2026-08-27）**：C1-C6 存储与状态逐项复核——C4 KV TTL 实为 48h（清单修正）、C5 migrations 已扩至 0004（清单修正）、C3 D1 分支 usage 清理缺口（**已修复**：usage.ts cleanupOld 挂 */30 cron，DELETE 90 天前）；默认映射表 gpt-image-2 tone `magic` → `Magic`（对齐上游 codex_catalog.go 白名单，KNOWN_UPSTREAM_TONES 同步）

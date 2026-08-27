@@ -222,3 +222,23 @@ export async function usageLogs(
   out.sort((a, b) => b.time.localeCompare(a.time));
   return { logs: out, total };
 }
+
+/**
+ * Cron TTL sweep for the D1 usage_events table (C3 fix, 2026-08-27): the
+ * 0001 migration only ran its DELETE at apply time, so with the D1 binding
+ * the table grew unbounded (upstream usage.jsonl rolls at 50k records; KV
+ * day buckets self-expire via their 90-day TTL). No-op without the D1
+ * binding — the KV path needs no sweep.
+ */
+export async function cleanupOld(env: Env, days: number = 90): Promise<void> {
+  if (!env.DB) return;
+  try {
+    const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
+    await env.DB
+      .prepare("DELETE FROM usage_events WHERE ts < ?")
+      .bind(cutoff)
+      .run();
+  } catch (e) {
+    console.warn("[usage] cleanup failed:", e instanceof Error ? e.message : e);
+  }
+}

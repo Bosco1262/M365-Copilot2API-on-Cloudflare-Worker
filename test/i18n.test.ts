@@ -9,7 +9,7 @@ const PAGES = ['index.html', 'login.html', 'conversation.html', 'debug.html'];
 const assetsDir = path.join(import.meta.dirname ?? '.', '..', 'assets');
 
 function extractDict(page) {
-  const m = page.match(/\/\*I18N-START\*\/\s*\nwindow\.I18N_DICT=([\s\S]*?);\n\s*\/\*@I18N-END\*\//);
+  const m = page.match(/\/\*I18N-START\*\/\s*\n\s*window\.I18N_DICT\s*=\s*([\s\S]*?);\n\s*\/\*@I18N-END\*\//);
   if (!m) throw new Error('I18N_DICT block missing');
   return new Function(`return (${m[1]})`)();
 }

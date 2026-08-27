@@ -28,7 +28,7 @@ const TCALL_RE = /\b(?:I18N\.t|t)\('([A-Za-z0-9_.\-]+)'/g;
 
 for (const page of PAGES) {
   const html = read(page);
-  const dm = html.match(/\/\*I18N-START\*\/\s*\nwindow\.I18N_DICT=([\s\S]*?);\n\s*\/\*@I18N-END\*\//);
+  const dm = html.match(/\/\*I18N-START\*\/\s*\n\s*window\.I18N_DICT\s*=\s*([\s\S]*?);\n\s*\/\*@I18N-END\*\//);
   if (!dm) { fail(`${page}: I18N_DICT block not found`); continue; }
   let D;
   try {
@@ -66,7 +66,7 @@ for (const page of PAGES) {
 // dynamic family coverage on index.html
 {
   const html = read('assets/index.html');
-  const dm = html.match(/window\.I18N_DICT=([\s\S]*?);\n\/\*@I18N-END\*\//);
+  const dm = html.match(/window\.I18N_DICT\s*=\s*([\s\S]*?);\n\/\*@I18N-END\*\//);
   if (dm) {
     const D = new Function(`return (${dm[1]})`)();
     for (const sec of ['dashboard', 'usage', 'accounts', 'apikeys', 'conversations', 'modeltest', 'settings']) {

@@ -477,6 +477,16 @@ export default {
         } catch (e) {
           console.warn("[scheduled] debug-records cleanup failed:", e instanceof Error ? e.message : e);
         }
+        try {
+          // Usage-event retention sweep (C3 fix): the D1 usage_events table
+          // had no TTL — the 0001 migration DELETE only ran at apply time.
+          // KV day buckets self-expire via their 90-day TTL, so this is a
+          // no-op without the D1 binding.
+          const { cleanupOld } = await import("./store/usage");
+          await cleanupOld(env);
+        } catch (e) {
+          console.warn("[scheduled] usage cleanup failed:", e instanceof Error ? e.message : e);
+        }
       })()
     );
   },

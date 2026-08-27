@@ -76,7 +76,7 @@ export const DEFAULT_MODEL_MAPPINGS: ModelMapping[] = [
   { publicModel: "gpt-5.5", upstreamTone: "Gpt_5_5_Chat", displayName: "GPT-5.5", defaultReasoningLevel: "medium" },
   { publicModel: "gpt-5.5-reasoning", upstreamTone: "Gpt_5_5_Reasoning", displayName: "GPT-5.5 Reasoning", defaultReasoningLevel: "medium" },
   { publicModel: "gpt-5.6-reasoning", upstreamTone: "Gpt_5_6_Reasoning", displayName: "GPT-5.6 Reasoning", defaultReasoningLevel: "medium" },
-  { publicModel: "gpt-image-2", upstreamTone: "magic", displayName: "GPT Image 2", defaultReasoningLevel: "none" },
+  { publicModel: "gpt-image-2", upstreamTone: "Magic", displayName: "GPT Image 2", defaultReasoningLevel: "none" },
   { publicModel: "claude-sonnet", upstreamTone: "Claude_Sonnet", displayName: "Claude Sonnet", defaultReasoningLevel: "medium" },
   { publicModel: "claude-sonnet-reasoning", upstreamTone: "Claude_Sonnet_Reasoning", displayName: "Claude Sonnet Reasoning", defaultReasoningLevel: "medium" },
 ];
@@ -104,7 +104,7 @@ export const KNOWN_UPSTREAM_TONES = [
   "Gpt_5_6_Reasoning",
   "Claude_Sonnet",
   "Claude_Sonnet_Reasoning",
-  "magic",
+  "Magic",
 ];
 
 export const RESTART_REQUIRED_FIELDS = [
