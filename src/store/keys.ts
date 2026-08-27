@@ -197,10 +197,16 @@ export async function updateKey(
       );
       if (!existing) return false;
       const rec = rowToRecord(existing);
+      const wasRevoked = !!existing.revoked;
       if (name !== "") rec.name = name;
       if (revoked !== undefined) rec.revoked = revoked;
       await env.DB.prepare(UPSERT_SQL).bind(...recordValues(rec)).run();
-      await mirrorToKV(env, rec);
+      // Structural-only mirror: only revoke state changes rewrite the legacy
+      // KV document (rename/revoke are the rollback-relevant mutations; the
+      // throttled lastUsedAt touch already avoids the doc entirely).
+      if (revoked !== undefined && rec.revoked !== wasRevoked) {
+        await mirrorToKV(env, rec);
+      }
       return true;
     } catch (e) {
       console.warn("[keys] D1 update failed, falling back to KV:", e instanceof Error ? e.message : e);

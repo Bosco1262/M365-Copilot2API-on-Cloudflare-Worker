@@ -18,7 +18,7 @@ import * as adminStore from "../store/admin";
 import * as settingsStore from "../store/settings";
 import * as usageStore from "../store/usage";
 import * as convStore from "../store/conversations";
-import { healthSnapshot, clearAllCooldowns } from "../pipeline/account";
+import { healthSnapshot, clearAllCooldowns, semaphoreSnapshot } from "../pipeline/account";
 import {
   newVerifier,
   pkceChallenge,
@@ -39,6 +39,65 @@ function clientIP(ctx: HandlerCtx): string {
     ctx.req.headers.get("X-Forwarded-For")?.split(",")[0].trim() ??
     ""
   );
+}
+
+// ------------------------------------------------------------------ lockout ---
+// Isolate-local login-failure lockout fallback (port of upstream
+// Server.loginAttempts semantics in admin_security.go) used when the
+// coordination DO is unbound or a stub call fails. 5 failures within 15
+// minutes lock the ip; the window rolls like upstream's WindowStart check.
+const LOCAL_LOCKOUT_WINDOW_MS = 15 * 60_000;
+const LOCAL_LOCKOUT_MAX_FAILURES = 5;
+const LOCAL_LOCKOUT_MAX_ENTRIES = 4096; // upstream maxLoginAttemptEntries
+const localLoginFailures = new Map<string, number[]>(); // ip -> failure timestamps (ms)
+
+function localLockoutPrune(ip: string): number[] {
+  const now = Date.now();
+  const list = (localLoginFailures.get(ip) ?? []).filter((ts) => now - ts < LOCAL_LOCKOUT_WINDOW_MS);
+  if (list.length === 0) localLoginFailures.delete(ip);
+  else localLoginFailures.set(ip, list);
+  return list;
+}
+
+function localLockoutCheck(ip: string): { locked: boolean; retryAfterSec: number } {
+  const list = localLockoutPrune(ip);
+  if (list.length < LOCAL_LOCKOUT_MAX_FAILURES) {
+    return { locked: false, retryAfterSec: Math.ceil(LOCAL_LOCKOUT_WINDOW_MS / 1000) };
+  }
+  // Mirror upstream: locked until the lockout moment + 15 min, so Retry-After
+  // counts down from the fifth failure.
+  const lockStart = list[list.length - LOCAL_LOCKOUT_MAX_FAILURES];
+  const remaining = Math.max(0, lockStart + LOCAL_LOCKOUT_WINDOW_MS - Date.now());
+  return { locked: true, retryAfterSec: Math.ceil(remaining / 1000) };
+}
+
+function localLockoutRecord(ip: string): void {
+  if (ip === "") return;
+  const now = Date.now();
+  // Bound the map like upstream (maxLoginAttemptEntries): drop expired
+  // entries first, then evict the oldest-timestamp entry as a last resort.
+  if (localLoginFailures.size >= LOCAL_LOCKOUT_MAX_ENTRIES && !localLoginFailures.has(ip)) {
+    for (const [k] of localLoginFailures) localLockoutPrune(k);
+    if (localLoginFailures.size >= LOCAL_LOCKOUT_MAX_ENTRIES) {
+      let oldestIp = "";
+      let oldestTs = Infinity;
+      for (const [k, list] of localLoginFailures) {
+        const first = list[0] ?? 0;
+        if (first < oldestTs) {
+          oldestTs = first;
+          oldestIp = k;
+        }
+      }
+      if (oldestIp !== "") localLoginFailures.delete(oldestIp);
+    }
+  }
+  const list = localLockoutPrune(ip);
+  list.push(now);
+  localLoginFailures.set(ip, list);
+}
+
+function localLockoutClear(ip: string): void {
+  localLoginFailures.delete(ip);
 }
 
 function cookieValue(ctx: HandlerCtx, name: string): string | undefined {
@@ -80,12 +139,14 @@ export async function handleLogin(ctx: HandlerCtx): Promise<Response> {
   } catch {
     return writeOpenAIError(400, "invalid_request_error", "bad json");
   }
-  // Global login-failure lockout (5 failures / 15 min) when the coordination
-  // DO is bound; unbound deployments keep the previous behavior.
+  // Global login-failure lockout (5 failures / 15 min). With the coordination
+  // DO bound the counters live in the DO (consistent across isolates); an
+  // unbound/failed DO falls back to the isolate-local counters (upstream
+  // process-local semantics).
   const ip = clientIP(ctx);
   if (ip !== "") {
-    const lock = await coordLockoutCheck(ctx.env, ip);
-    if (lock?.locked) {
+    const lock = (await coordLockoutCheck(ctx.env, ip)) ?? localLockoutCheck(ip);
+    if (lock.locked) {
       return jsonOut(
         {
           error: {
@@ -100,9 +161,12 @@ export async function handleLogin(ctx: HandlerCtx): Promise<Response> {
   }
   const { ok, mustChange } = await adminStore.verifyAdminPassword(ctx.env, password);
   if (!ok || password === "") {
-    if (ip !== "") await coordLockoutRecord(ctx.env, ip);
+    if (ip !== "") {
+      if ((await coordLockoutRecord(ctx.env, ip)) === null) localLockoutRecord(ip);
+    }
     return writeOpenAIError(401, "auth_error", "invalid administrator password");
   }
+  if (ip !== "") localLockoutClear(ip);
   const token = await adminStore.createAdminSession(ctx.env);
   const headers = { "Set-Cookie": sessionCookie(token, secureCookie(ctx)) };
   const passwordSource = await adminStore.adminPasswordSource(ctx.env);
@@ -330,7 +394,10 @@ export async function handleAccountsList(ctx: HandlerCtx): Promise<Response> {
     return writeOpenAIError(405, "invalid_request_error", "method not allowed");
   }
   const list = await accountsStore.listAccounts(ctx.env);
-  const health = await healthSnapshot(ctx.env);
+  const [health, inflight] = await Promise.all([
+    healthSnapshot(ctx.env),
+    semaphoreSnapshot(ctx.env),
+  ]);
   const out = list.map((a) => {
     let status = a.status;
     let cooldownUntil: string | undefined;
@@ -345,9 +412,18 @@ export async function handleAccountsList(ctx: HandlerCtx): Promise<Response> {
       displayName: a.displayName,
       status,
       scheduleEnabled: !a.scheduleDisabled,
-      callCount: 0,
-      rateLimited: !!(h && h["authFailed"] !== true && status === "cooldown"),
+      // Port of the upstream view (server.go:655-673): callCount comes from
+      // accountPool.CallCount, rateLimited from the limited flag (not an
+      // inference), imageLimited/authFailed/authFailReason/throttling from the
+      // health state, concurrency from the semaphore snapshot.
+      callCount: Number(h?.["calls"] ?? 0),
+      rateLimited: !!(h && h["limited"] === true),
+      imageLimited: !!(h && h["imageLimited"] === true),
+      authFailed: !!(h && h["authFailed"] === true),
+      authFailReason: h?.["authFailReason"] !== undefined ? String(h["authFailReason"]) : undefined,
       cooldownUntil,
+      throttling: h?.["throttling"] ?? undefined,
+      concurrency: inflight?.[a.id] ?? 0,
       oid: a.oid,
       tid: a.tid,
       expiresAt: a.expiresAt,
@@ -423,12 +499,25 @@ export async function handleTokenHealth(ctx: HandlerCtx): Promise<Response> {
       status: a.status,
       expires_at: a.expiresAt,
       expired,
-      expires_in: expired
-        ? "expired"
-        : `${Math.floor((expiresAtMs - now) / 1000)}s`,
+      // Go duration formatting parity: a.ExpiresAt.Sub(now).Truncate(second)
+      // .String() renders "1h2m3s"; Worker previously exposed raw seconds.
+      expires_in: expired ? "expired" : formatGoDuration(expiresAtMs - now),
     };
   });
   return jsonOut({ accounts: out, now: new Date().toISOString() });
+}
+
+// Port of time.Duration.String() after Truncate(time.Second):
+// 0 -> "0s"; 90s -> "1m30s"; 3735s -> "1h2m15s".
+function formatGoDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec <= 0) return "0s";
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h${m}m${s}s`;
+  if (m > 0) return `${m}m${s}s`;
+  return `${s}s`;
 }
 
 export async function handleClearCooldown(ctx: HandlerCtx): Promise<Response> {

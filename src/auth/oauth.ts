@@ -99,6 +99,22 @@ export async function exchangeCode(
   return requestToken(form.toString(), cfg.tokenEndpoint);
 }
 
+// Upstream auth.ROPC always targets the /organizations tenant endpoint
+// (token.go: Authority()+"/organizations/oauth2/v2.0/token"), independent of
+// M365_TOKEN_ENDPOINT. We mirror the semantics but build the URL from the
+// authority's origin: the upstream string concatenation yields
+// "…/common/organizations/…" with the default authority, which AAD rejects
+// with 404 (verified 2026-08-27). Origin-based join stays valid for any
+// authority (e.g. national clouds) and is a no-op when the authority is
+// already the login root.
+function ropcTokenEndpoint(authority: string): string {
+  try {
+    return new URL(authority).origin + "/organizations/oauth2/v2.0/token";
+  } catch {
+    return "https://login.microsoftonline.com/organizations/oauth2/v2.0/token";
+  }
+}
+
 export async function ropcToken(env: Env, username: string, password: string): Promise<TokenSet> {
   const cfg = await effectiveOAuthConfig(env);
   const form = new URLSearchParams();
@@ -107,7 +123,7 @@ export async function ropcToken(env: Env, username: string, password: string): P
   form.set("username", username);
   form.set("password", password);
   form.set("scope", cfg.scope);
-  return requestToken(form.toString(), `${cfg.authority}/organizations/oauth2/v2.0/token`);
+  return requestToken(form.toString(), ropcTokenEndpoint(cfg.authority));
 }
 
 async function requestToken(body: string, endpoint: string): Promise<TokenSet> {

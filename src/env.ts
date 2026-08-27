@@ -29,7 +29,15 @@ export interface Env {
   M365_DEVICE_AUTHORITY?: string;
   M365_DEVICE_SCOPE?: string;
   M365_CHAT_TIMEOUT_SECONDS?: string;
+  M365_RATE_LIMIT_COOLDOWN_SECONDS?: string;
   M365_INCLUDE_UPSTREAM_EVENTS?: string;
+  // Exact AAD endpoint overrides (port of auth/config.go AuthorizeEndpoint /
+  // TokenEndpoint / DeviceCodeEndpoint / DeviceTokenEndpoint). Highest
+  // priority over the authority-derived defaults.
+  M365_AUTHORIZE_ENDPOINT?: string;
+  M365_TOKEN_ENDPOINT?: string;
+  M365_DEVICE_ENDPOINT?: string;
+  M365_DEVICE_TOKEN_ENDPOINT?: string;
 }
 
 export const DEFAULT_ADMIN_PASSWORD = "admin123";
@@ -89,17 +97,25 @@ export function oauthConfig(env: Env) {
   const clientId = pick(env, ["M365_BROWSER_CLIENT_ID"], ["M365_CLIENT_ID"], DEFAULT_CLIENT_ID);
   const deviceClientId = pick(env, ["M365_DEVICE_CLIENT_ID"], ["M365_CLIENT_ID"], FOCI_CLIENT_ID);
   const authority = pick(env, ["M365_BROWSER_AUTHORITY", "M365_DEVICE_AUTHORITY"], ["M365_AUTHORITY"], DEFAULT_AUTHORITY);
+  const deviceAuthority = pick(env, ["M365_DEVICE_AUTHORITY"], ["M365_AUTHORITY"], DEFAULT_AUTHORITY);
   const redirectUri = pick(env, ["M365_BROWSER_REDIRECT_URI"], ["M365_REDIRECT_URI"], DEFAULT_REDIRECT_URI);
   const scope = pick(env, ["M365_BROWSER_SCOPE", "M365_DEVICE_SCOPE"], ["M365_SCOPE"], DEFAULT_SCOPE);
+  // Exact endpoint overrides win over the authority-derived paths (upstream
+  // config.go: exact env vars are checked first, then Authority()+suffix).
+  const authorizeEndpoint = pick(env, ["M365_AUTHORIZE_ENDPOINT"], [], `${authority}/oauth2/v2.0/authorize`);
+  const tokenEndpoint = pick(env, ["M365_TOKEN_ENDPOINT"], [], `${authority}/oauth2/v2.0/token`);
+  const deviceCodeEndpoint = pick(env, ["M365_DEVICE_ENDPOINT"], [], `${deviceAuthority}/oauth2/v2.0/devicecode`);
+  const deviceTokenEndpoint = pick(env, ["M365_DEVICE_TOKEN_ENDPOINT"], [], `${deviceAuthority}/oauth2/v2.0/token`);
   return {
     clientId,
     deviceClientId,
     authority,
     redirectUri,
     scope,
-    authorizeEndpoint: `${authority}/oauth2/v2.0/authorize`,
-    tokenEndpoint: `${authority}/oauth2/v2.0/token`,
-    deviceCodeEndpoint: `${authority}/oauth2/v2.0/devicecode`,
+    authorizeEndpoint,
+    tokenEndpoint,
+    deviceCodeEndpoint,
+    deviceTokenEndpoint,
   };
 }
 
@@ -115,14 +131,25 @@ export async function effectiveOAuthConfig(env: Env): Promise<ReturnType<typeof 
     const authority = over(s.authority, base.authority);
     const redirectUri = over(s.redirectUri, base.redirectUri);
     const scope = over(s.scope, base.scope);
+    // Exact env overrides still win; otherwise derive from the effective
+    // authority (device endpoints keep the base device authority since the
+    // settings schema has no separate device-authority field).
+    const authorizeEndpoint =
+      (env.M365_AUTHORIZE_ENDPOINT && env.M365_AUTHORIZE_ENDPOINT.trim() !== "")
+        ? env.M365_AUTHORIZE_ENDPOINT.trim()
+        : `${authority}/oauth2/v2.0/authorize`;
+    const tokenEndpoint =
+      (env.M365_TOKEN_ENDPOINT && env.M365_TOKEN_ENDPOINT.trim() !== "")
+        ? env.M365_TOKEN_ENDPOINT.trim()
+        : `${authority}/oauth2/v2.0/token`;
     return {
       ...base,
       clientId,
       authority,
       redirectUri,
       scope,
-      authorizeEndpoint: `${authority}/oauth2/v2.0/authorize`,
-      tokenEndpoint: `${authority}/oauth2/v2.0/token`,
+      authorizeEndpoint,
+      tokenEndpoint,
     };
   } catch {
     return base;

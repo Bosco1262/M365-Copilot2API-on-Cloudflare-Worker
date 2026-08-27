@@ -41,7 +41,7 @@
 | 流式文本 holdback（围栏扣留） | `src/api/holdback.ts` | `server.go` 流式分支内联（无独立文件） | ✅ 双向对应（行为移植） |
 | 控制台聊天（原生 / 流） | `src/admin/chat.ts` | `server.go`（chatOnce）、`stream.go`（chatStream） | ✅ 双向对应 |
 | 全部 `/api/*` 管理端点 | `src/admin/handlers.ts` | `server.go`、`admin_security.go`、`settings.go`、`keys.go`、`account_health.go`、`version.go`、`deployments.go`、PKCE 流程 | ✅ 双向对应 |
-| 白名单 / 用户会话 / 调试 / memory / 部署 stub | `src/admin/extras.ts` | `conversation_manager.go`、`sessions.go`、`debug.go`、`memory_handlers.go`、`deployments.go`、`plugins.go` | ✅ 双向对应（**`/api/plugins` 端点未移植**，见下） |
+| 白名单 / 用户会话 / 调试 / memory / 部署 stub | `src/admin/extras.ts` | `conversation_manager.go`、`sessions.go`、`debug.go`、`memory_handlers.go`、`deployments.go`、`plugins.go` | ✅ 双向对应（`/api/plugins` 已实现：substrate 透传 + 5min KV 缓存，2026-08-27 复核） |
 | 账号健康 / 选择 / 轮询 | `src/pipeline/account.ts` | `account_health.go`、`server.go`（resolveAccount/nextHealthyAccount） | ✅ 双向对应 |
 | 模型目录 / tone 路由 | `src/pipeline/catalog.ts` | `codex_catalog.go`、`server.go`（modelTone/reasoningTone） | ✅ 双向对应 |
 | 对话自动清理 | `src/pipeline/cleanup.ts` | `auto_cleanup.go` | ✅ 双向对应 |
@@ -133,11 +133,10 @@
 | 文件 | 说明 |
 |---|---|
 | `internal/web/public_identity.go`(+test) | 公开身份清洗（上游默认关闭的可选特性） |
-| `internal/chathub/ssrf.go`(+test) | 附件 SSRF 防护（当前接受任意 imageUrl） |
-| `internal/web/plugins.go` | `/api/plugins` 插件清单端点 |
-| `internal/web/compat_metadata.go`(+test) | `m365.events` 兼容元数据（`M365_INCLUDE_UPSTREAM_EVENTS`） |
+| `internal/chathub/ssrf.go`(+test) | 附件 SSRF 防护（当前为平台近似：scheme/IP 字面量/主机名段拦截，域名复查依赖 CF 边缘，无运行时 DNS API） |
+| `internal/web/compat_metadata.go`(+test) | `m365.events` 兼容元数据（`M365_INCLUDE_UPSTREAM_EVENTS`；env.ts 有类型声明但未接线） |
 | `internal/auth/cache.go` | refresh token 落盘 AES-GCM 加密（当前明文存 KV） |
-| `internal/web/context_budget.go` | 上下文预算（可能已合并进 prompt 扁平化或被简化） |
+| `internal/web/context_budget.go` | 上下文预算（已由 `src/pipeline/contextBudget.ts` slidingWindow 覆盖） |
 | `internal/web/tool_progress.go`(+test) | 工具进度卡（聊天流已移植，Responses 路径暂跳过） |
 | `internal/auth/device.go` | Device Code 流（**[上游死代码]**，上游未挂接任何路由） |
 

@@ -27,6 +27,10 @@ interface ResponsesRequest {
 
 const USAGE_SOURCE_HEURISTIC = "heuristic_character_estimate";
 
+// Port of server.go maxResponsesPerTenant: per (tenant\x00session) bucket cap
+// enforced on write (oldest evicted) in addition to the 1h TTL.
+const MAX_RESPONSES_PER_TENANT = 256;
+
 function heuristicTokenCount(text: string): number {
   let ascii = 0;
   let other = 0;
@@ -238,32 +242,64 @@ export function responsesToOpenAI(body: ResponsesRequest): { o: OaiReqBody; erro
 interface StoredHistory {
   at: string;
   messages: OaiMsg[];
+  tenant: string;
+  sessionId: string;
 }
 
-async function loadHistory(
+// Port of protocol_handlers.go responseSessionID: the explicit session key
+// (X-M365-Session-Id) participates in history isolation so two sessions of
+// the same tenant cannot cross-read previous_response_id entries.
+function responseSessionID(ctx: HandlerCtx): string {
+  return (ctx.req.headers.get("X-M365-Session-Id") ?? "").trim();
+}
+
+export async function loadHistory(
   ctx: HandlerCtx,
   tenant: string,
+  sessionId: string,
   responseId: string
 ): Promise<OaiMsg[] | null> {
-  const key = `resp-history/${tenant}/${responseId}`;
+  const key = `resp-history/${tenant}/${sessionId}/${responseId}`;
   const stored = await ctx.env["m365-copilot2api_KV"].get<StoredHistory>(key, "json");
   if (!stored) return null;
   if (Date.now() - Date.parse(stored.at) > 3600_000) return null;
+  // Defensive: even if the key somehow escaped the namespace, never hand one
+  // session's history to another (upstream 400 session/tenant mismatch).
+  if (stored.sessionId !== sessionId || stored.tenant !== tenant) return null;
   return stored.messages;
 }
 
-async function saveHistory(
+export async function saveHistory(
   ctx: HandlerCtx,
   tenant: string,
+  sessionId: string,
   responseId: string,
   messages: OaiMsg[]
 ): Promise<void> {
-  const key = `resp-history/${tenant}/${responseId}`;
-  await ctx.env["m365-copilot2api_KV"].put(
-    key,
-    JSON.stringify({ at: new Date().toISOString(), messages } satisfies StoredHistory),
-    { expirationTtl: 3600 }
-  );
+  const kv = ctx.env["m365-copilot2api_KV"];
+  const prefix = `resp-history/${tenant}/${sessionId}/`;
+  const key = prefix + responseId;
+  const at = new Date().toISOString();
+  await kv.put(key, JSON.stringify({ at, messages, tenant, sessionId } satisfies StoredHistory), {
+    expirationTtl: 3600,
+    metadata: { at },
+  });
+  // Port of the per-tenant bucket cap (upstream responseMessages[nsKey] with
+  // maxResponsesPerTenant=256): list the bucket, evict the oldest when full.
+  try {
+    const listed = await kv.list({ prefix, limit: 300 });
+    if (listed.keys.length >= MAX_RESPONSES_PER_TENANT) {
+      const entries = listed.keys
+        .map((k) => ({ name: k.name, at: (k.metadata as { at?: string } | null)?.at ?? "" }))
+        .sort((a, b) => a.at.localeCompare(b.at));
+      // Evict oldest until one slot is free.
+      for (let i = 0; i < entries.length - MAX_RESPONSES_PER_TENANT + 1; i++) {
+        if (entries[i].name !== key) await kv.delete(entries[i].name);
+      }
+    }
+  } catch {
+    /* capacity management must never break the save path */
+  }
 }
 
 function openAIChoice(src: Record<string, unknown>): { msg: Record<string, unknown> | null; finish: string } {
@@ -415,6 +451,7 @@ async function streamResponsesAdapter(
   body: ResponsesRequest,
   model: string,
   tenant: string,
+  sessionId: string,
   startedAt: number
 ): Promise<Response> {
   const inner = await streamChatCompletions(ctx, { ...o, stream: true });
@@ -634,7 +671,7 @@ async function streamResponsesAdapter(
       } else if (text !== "") {
         storedMessages.push({ role: "assistant", content: text });
       }
-      ctx.waitUntil(saveHistory(ctx, tenant, publicID, storedMessages));
+      ctx.waitUntil(saveHistory(ctx, tenant, sessionId, publicID, storedMessages));
       ctx.waitUntil(
         Promise.resolve().then(async () => {
           const { recordUsage } = await import("../store/usage");
@@ -689,8 +726,9 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
 
   // previous_response_id continuation.
   const tenant = extractTenant(ctx);
+  const sessionId = responseSessionID(ctx);
   if (body.previous_response_id) {
-    const prior = await loadHistory(ctx, tenant, body.previous_response_id);
+    const prior = await loadHistory(ctx, tenant, sessionId, body.previous_response_id);
     if (!prior || prior.length === 0) {
       return jsonOut(
         { error: { message: "unknown previous_response_id", type: "invalid_request_error" } },
@@ -705,7 +743,7 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
   // C12: streaming converts the inner OpenAI SSE incrementally (upstream
   // streamResponsesAdapter parity) instead of buffering then replaying.
   if (body.stream) {
-    return streamResponsesAdapter(ctx, o, body, model, tenant, startedAt);
+    return streamResponsesAdapter(ctx, o, body, model, tenant, sessionId, startedAt);
   }
   const core = await runCompletionsCore(ctx, o);
   if (!core.ok) {
@@ -731,7 +769,7 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
     object: "chat.completion",
     created: Math.floor(Date.now() / 1000),
     model,
-    m365: m365Metadata(s.res),
+    m365: m365Metadata(s.res, ctx.env),
     choices: [
       s.toolCalls && s.toolCalls.length > 0
         ? {
@@ -760,7 +798,7 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
   } else if (s.text !== "") {
     storedMessages.push({ role: "assistant", content: s.text });
   }
-  ctx.waitUntil(saveHistory(ctx, tenant, publicID, storedMessages));
+  ctx.waitUntil(saveHistory(ctx, tenant, sessionId, publicID, storedMessages));
 
   // Usage record under /v1/responses.
   const estimate = estimateResponsesUsage(model, o.messages ?? [], s.text);

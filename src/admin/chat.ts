@@ -5,7 +5,7 @@ import type { HandlerCtx } from "../router";
 import { jsonOut, writeOpenAIError, estimateTokens } from "../util";
 import { describeUpstream } from "../errors";
 import { getSettings } from "../store/settings";
-import { resolveAccount, markFailure, markSuccess } from "../pipeline/account";
+import { resolveAccount, markFailure, markSuccess, markCall } from "../pipeline/account";
 import { chat as chathubChat } from "../chathub/client";
 import { normalizeFrame, semanticEvents, stripCitationMarkers } from "../chathub/protocol";
 import { getSessionBinding, upsertSessionBinding } from "../store/conversations";
@@ -71,6 +71,7 @@ export async function handleChat(ctx: HandlerCtx): Promise<Response> {
   const settings = await getSettings(ctx.env);
 
   try {
+    ctx.waitUntil(markCall(ctx.env, acc.id).catch(() => {}));
     const res = await chathubChat(
       { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "" },
       {
@@ -128,6 +129,7 @@ export async function handleChatStream(ctx: HandlerCtx): Promise<Response> {
   const settings = await getSettings(ctx.env);
 
   try {
+    ctx.waitUntil(markCall(ctx.env, acc.id).catch(() => {}));
     const res = await chathubChat(
       { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "" },
       {

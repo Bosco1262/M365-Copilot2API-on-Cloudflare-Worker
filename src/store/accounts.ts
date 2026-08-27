@@ -14,7 +14,14 @@ import { firstNonEmpty, nowIso } from "../util";
 import { oauthConfig, type Env } from "../env";
 import { OAuthError } from "../auth/oauth";
 import { getJSON, putJSON } from "../kv";
-import { coordMutexAcquire, coordMutexRelease, coordNextAccountID } from "../do/coordination";
+import {
+  coordMutexAcquire,
+  coordMutexRelease,
+  coordNextAccountID,
+  coordGetAccounts,
+  coordSetAccounts,
+  coordInvalidateAccounts,
+} from "../do/coordination";
 
 interface AccountsDoc {
   accounts: AccountToken[];
@@ -139,8 +146,14 @@ async function mirrorToKV(
   }
 }
 
-/** Atomic row upsert with one optimistic-lock retry (see UPDATE_SQL). */
-async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string): Promise<boolean> {
+/** Atomic row upsert with one optimistic-lock retry (see UPDATE_SQL).
+ *  Returns whether the row was INSERTed (new account) so callers can decide
+ *  which side effects (KV mirror, DO cache invalidation) apply. */
+async function d1Upsert(
+  env: Env,
+  acc: AccountToken,
+  expectedUpdatedAt?: string
+): Promise<{ ok: boolean; inserted: boolean }> {
   const db = env.DB!;
   const existing = (
     await db
@@ -151,7 +164,7 @@ async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string)
   if (!existing) {
     try {
       await db.prepare(INSERT_SQL).bind(...accountValues(acc)).run();
-      return true;
+      return { ok: true, inserted: true };
     } catch {
       // Concurrent insert won the race: fall through to the update path.
     }
@@ -162,7 +175,7 @@ async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string)
       .bind(acc.id)
       .first<AccountRow>()
   );
-  if (!cur) return false;
+  if (!cur) return { ok: false, inserted: false };
   // Merge semantics ported from the old KV upsert: never blank out fields the
   // new token set does not carry.
   const merged: AccountToken = { ...acc };
@@ -190,7 +203,7 @@ async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string)
       expect
     )
     .run()) as { meta?: { changes?: number } };
-  if ((res?.meta?.changes ?? 0) > 0) return true;
+  if ((res?.meta?.changes ?? 0) > 0) return { ok: true, inserted: false };
   // Optimistic-lock miss: another writer updated the row concurrently.
   // Re-read once and retry against its updated_at.
   const fresh = (
@@ -199,7 +212,7 @@ async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string)
       .bind(cur.id)
       .first<AccountRow>()
   );
-  if (!fresh) return false;
+  if (!fresh) return { ok: false, inserted: false };
   const retry: AccountToken = { ...merged };
   retry.refreshToken = merged.refreshToken || rowToAccount(fresh).refreshToken;
   const res2 = (await db
@@ -221,7 +234,7 @@ async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string)
       fresh.updated_at
     )
     .run()) as { meta?: { changes?: number } };
-  return (res2?.meta?.changes ?? 0) > 0;
+  return { ok: (res2?.meta?.changes ?? 0) > 0, inserted: false };
 }
 
 // ---------------------------------------------------------- KV helpers ---
@@ -238,9 +251,19 @@ async function saveDoc(env: Env, doc: AccountsDoc): Promise<void> {
 
 export async function listAccounts(env: Env): Promise<AccountToken[]> {
   if (env.DB) {
+    // Storage review: the hot path (every /v1/* request) reads the account
+    // list. With the coordination DO bound, a short-lived in-DO cache serves
+    // it instead of a full D1 scan per request; on miss we refetch (with the
+    // lazy KV backfill) and push the rows back. Structural changes
+    // invalidate the cache, so admin views stay fresh.
+    const cached = await coordGetAccounts(env);
+    if (cached?.cached && cached.accounts) return cached.accounts;
     await d1BackfillFromKV(env);
     const rows = await d1List(env);
-    if (rows) return rows;
+    if (rows) {
+      await coordSetAccounts(env, rows);
+      return rows;
+    }
   }
   const doc = await loadDoc(env);
   return doc.accounts;
@@ -300,16 +323,22 @@ export async function upsertAccount(env: Env, tok: TokenSet): Promise<AccountTok
   };
   if (env.DB) {
     try {
-      const ok = await d1Upsert(env, acc);
+      const { ok, inserted } = await d1Upsert(env, acc);
       if (ok) {
-        await mirrorToKV(env, (list) => {
-          const i = list.findIndex(
-            (a) => a.id === acc.id || (acc.email !== "" && a.email === acc.email)
-          );
-          if (i >= 0) list[i] = acc;
-          else list.push(acc);
-          return true;
-        });
+        // Mirror + cache invalidation only for structural changes (new
+        // account). Token refresh / status updates no longer rewrite the
+        // legacy KV document on every write (storage review: 镜像降频).
+        if (inserted) {
+          await mirrorToKV(env, (list) => {
+            const i = list.findIndex(
+              (a) => a.id === acc.id || (acc.email !== "" && a.email === acc.email)
+            );
+            if (i >= 0) list[i] = acc;
+            else list.push(acc);
+            return true;
+          });
+          await coordInvalidateAccounts(env);
+        }
         return acc;
       }
       console.warn("[accounts] D1 upsert reported no changes; KV path used");
@@ -342,6 +371,7 @@ export async function deleteAccount(env: Env, id: string): Promise<void> {
       await env.DB.prepare("DELETE FROM accounts WHERE id = ? OR oid = ? OR email = ?")
         .bind(id, id, id)
         .run();
+      await coordInvalidateAccounts(env);
     } catch (e) {
       console.warn("[accounts] D1 delete failed:", e instanceof Error ? e.message : e);
     }
@@ -362,17 +392,9 @@ export async function setScheduleEnabled(env: Env, id: string, enabled: boolean)
         .prepare("UPDATE accounts SET schedule_disabled = ?, updated_at = ? WHERE id = ?")
         .bind(enabled ? 0 : 1, nowIso(), id)
         .run()) as { meta?: { changes?: number } };
-      if ((res?.meta?.changes ?? 0) > 0) {
-        await mirrorToKV(env, (list) => {
-          const a = list.find((x) => x.id === id);
-          if (!a) return false;
-          a.scheduleDisabled = !enabled;
-          a.updatedAt = nowIso();
-          return true;
-        });
-        return true;
-      }
-      return false;
+      // No KV mirror: schedule toggles are high-frequency writes and the KV
+      // document is only a rollback safety net for structural changes.
+      return (res?.meta?.changes ?? 0) > 0;
     } catch (e) {
       console.warn("[accounts] D1 schedule update failed, falling back to KV:", e instanceof Error ? e.message : e);
     }
@@ -411,17 +433,9 @@ export async function updateRefreshToken(env: Env, id: string, refreshToken: str
         .prepare("UPDATE accounts SET refresh_token = ?, updated_at = ? WHERE id = ?")
         .bind(trimmed, nowIso(), id)
         .run()) as { meta?: { changes?: number } };
-      if ((res?.meta?.changes ?? 0) > 0) {
-        await mirrorToKV(env, (list) => {
-          const a = list.find((x) => x.id === id);
-          if (!a) return false;
-          a.refreshToken = trimmed;
-          a.updatedAt = nowIso();
-          return true;
-        });
-        return true;
-      }
-      return false;
+      // No KV mirror (see setScheduleEnabled): refresh-token writes are the
+      // hottest account mutation and the KV doc is only a structural mirror.
+      return (res?.meta?.changes ?? 0) > 0;
     } catch (e) {
       console.warn("[accounts] D1 refresh update failed, falling back to KV:", e instanceof Error ? e.message : e);
     }
@@ -507,18 +521,12 @@ async function markStatus(env: Env, id: string, status: string): Promise<void> {
   if (env.DB) {
     try {
       // Column-scoped update: never touches the token columns, so it cannot
-      // clobber a concurrently redeemed refresh token (audit P1-1).
+      // clobber a concurrently redeemed refresh token (audit P1-1). No KV
+      // mirror (structural-only mirror policy).
       await env.DB
         .prepare("UPDATE accounts SET status = ?, updated_at = ? WHERE id = ?")
         .bind(status, nowIso(), id)
         .run();
-      await mirrorToKV(env, (list) => {
-        const a = list.find((x) => x.id === id);
-        if (!a) return false;
-        a.status = status;
-        a.updatedAt = nowIso();
-        return true;
-      });
       return;
     } catch (e) {
       console.warn("[accounts] D1 status update failed, falling back to KV:", e instanceof Error ? e.message : e);

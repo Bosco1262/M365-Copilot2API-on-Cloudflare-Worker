@@ -26,7 +26,7 @@
 | `DELETE /v1/sessions/{id}` | ✅ 完整 | |
 | `/v1/mcp/sse` · `/v1/mcp/message` · `/v1/mcp/tools` | ✅ 完整 | MCP SSE server 移植（endpoint 握手帧、JSON-RPC 分发（initialize/tools/list/tools/call）、全局工具注册表（由 /v1/chat 请求工具自动合并 + settings.mcpServers 外部服务器桥接 #19）、tools/list 回退语义与 -32000/-32700/-32601 错误码逐字对齐。**桥接工具**经出站 SSE 客户端执行（30s 队列语义，超时回占位文案 #20）；未桥接的 tools/call 仍返回 no tools available。**差异** [平台]：无 MCP_HUB 绑定时会话表存 isolate 内存；stdio 出站传输不适用（Workers 无子进程），外部服务器走 SSE 传输 |
 | `/v1/memory/flags` · `/instructions(+/id)` · `/settings` | ✅ 完整 | substrate 透传代理（Bearer 账号 token + x-anchormailbox 等 5 头逐字对齐），变更操作要求管理员会话 cookie（403 语义一致）；FeatureFlags.memoryV2 开关（settings/env M365_ENABLE_MEMORY_V2）现可关闭 update_memory_plugin/add_custom_instructions 注入，默认开启；控制台另设 /api/admin/memory/* 管理员会话变体（见批次 F 卡片） |
-| `GET /api/plugins` | ❌ 未移植 | **[未做]** 上游插件清单端点（substrate EventListener 透传+5min 缓存）；native 工具事件抽取本身已移植（见机制表 native_tools.go 行），仅此清单端点缺 |
+| `GET /api/plugins` | ✅ 完整 | 上游插件清单端点（substrate EventListener 透传 + 每账号 5min KV 缓存）；鉴权为 API key 或管理员会话双通道（上游仅 API-key 中间件）；native 工具事件抽取独立移植（见机制表 native_tools.go 行）。2026-08-27 复核确认已实现，原 [未做] 标记作废 |
 
 ### /api/* 管理端点
 
@@ -99,7 +99,7 @@
 | 白名单（conversationManager.WhitelistedIDs 进保护集） | ✅ 完整 | KV 持久化 + 清理保护集 + 控制台白名单管理卡片 |
 | WS 连接池（connpool.go Take/Return 复用） | ❌ 裁剪 | **[平台]** isolate 无法跨请求持有连接；每请求新建（上游 Dialer 直连路径同样支持） |
 | 连接预热（preheater.go） | — | **[上游死代码]** 上游 Preheater 本身就是 stub（Take 返回 nil、Stats 返回 mode:stub），无功能损失 |
-| Function calling router 模式 | ✅ 完整 | CALL_TOOL/JSON 信封/修复轮/并行自适应限制（exec 类串行） |
+| Function calling router 模式 | ✅ 完整 | CALL_TOOL/JSON 信封/修复轮/并行自适应限制（exec 类串行）。**2026-08-27 补齐流式预调用**：上游 server.go 流式路径（1810-1881）在 `stream:true + tools` 时先跑 `modelToolRouterPrompt`（工具定义内嵌 prompt），命中即输出 tool_calls、NO_TOOL_NEEDED 才 fall-through 到文本流式；Worker 版原仅非流式有预调用，现流式已对齐（含 failover）。同步对齐流式 holdback 尾缓冲 8→3 rune（上游 `server.go:1962`） |
 | Function calling fenced 检测（```bash 自动转换+裸 JSON command 扫描+声明校验） | ✅ 完整 | |
 | 流式围栏扣留（疑似工具调用文本不外流，确认后整体转分片 tool_calls） | ✅ 完整 | rune 边界保持 |
 | 原生事件工具检测（native_tools.go walk + events.go extractToolEvents） | ✅ 完整 | extractToolEvents 递归遍历 update 帧参数所有层级（name/toolName/pluginName/functionName × arguments/args/parameters/input/functionArguments 双字段判定，按 name+JSON(args) 去重）→ nativeToolCalls 仅收声明过的工具名（call_ uuid id）；流式路径同样接入（fenced→native→校验/限额，tool 事件只收集不出文本），且流式请求现同样下发 toolPlugins/MCPServerURL |
@@ -116,10 +116,10 @@
 | Codex usage tiktoken o200k | ⚠️ 启发式 | Worker 不内置词表；heuristic_character_estimate 口径，m365.usage_source 如实标注 [简化] |
 | public_identity 公开身份策略（M365_PUBLIC_IDENTITY_POLICY 总开关、身份预设、正文/推理/流式清洗器） | ❌ 未移植 | **[未做]** 上游默认关闭的可选特性（20KB），面向公开反代场景清洗微软痕迹；个人自部署收益低 |
 | sanitizePublicAssistantTextForModel 等清洗 | ❌ 未移植 | 随 public_identity 一并归属；基础错误脱敏（不泄 token/URL）已由 describeUpstream 覆盖 |
-| 兼容元数据 m365.events（M365_INCLUDE_UPSTREAM_EVENTS=1 时附带原始事件） | ❌ 未移植 | **[未做]** 小开关，非默认行为 |
+| 兼容元数据 m365.events（M365_INCLUDE_UPSTREAM_EVENTS=1 时附带原始事件） | ✅ 完整 | 2026-08-27：`m365Metadata` 升级为 compatM365Metadata 全字段版（throttling/suggestedResponses/offense/scores/conversationTransferToken/meteringInformation/spokenText/timestamps/storageMessageId/citations）+ events 开关（envTrue 判定） |
 | normalizeJSONText / response_format json(_schema) 注入 | ✅ 完整 | |
 | estimateResponsesUsage 协议帧常数 | ✅ 完整 | 常数一致，计数器为启发式 |
-| previous_response_id 历史租户隔离 + 1h 过期 + 容量上限 | ⚠️ 等价 | 上游内存 map（每租户 maxResponsesPerTenant+1h）；KV TTL 版无容量上限（TTL 自然清理）[简化] |
+| previous_response_id 历史租户隔离 + 1h 过期 + 容量上限 | ✅ 完整 | 2026-08-27：KV 键升级为 `resp-history/{tenant}/{session}/{id}`（`tenant\0session` 双隔离语义），写入带 metadata.at，`maxResponsesPerTenant=256` 超限删最旧（list 前缀），load 时校验 session/tenant；仍为 KV 而非内存 [简化] |
 | 管理员安全（强制改密/会话 Cookie HttpOnly+SameSite/SameSite=Lax/登出失效/X-Forwarded-Proto Secure 判定） | ✅ 完整 | |
 | 安全响应头（nosniff/X-Frame-Options/Referrer-Policy） | ✅ 完整 | |
 | 完整 CSP 头（style/script 白名单域名等） | ❌ 页面缺失 | **[未做]** Static Assets 直接服务页面绕过了 Worker 头注入；需 `_headers` 文件补 CSP |
@@ -143,7 +143,7 @@
 |---|---|
 | ADMIN_PASSWORD / M365_BROWSER_* / M365_CLIENT_ID / M365_AUTHORITY / M365_REDIRECT_URI / M365_SCOPE / M365_DEVICE_* | ✅ 生效（vars/secrets） |
 | M365_CHAT_TIMEOUT_SECONDS / M365_AUTO_CLEANUP* | ✅ 生效 |
-| M365_INCLUDE_UPSTREAM_EVENTS | ❌ **[未做]** 随 m365.events 元数据开关未移植 |
+| M365_INCLUDE_UPSTREAM_EVENTS | ✅ 生效 | m365.events 开关（envTrue：1/true/yes/on）；随完整版 m365Metadata 于 2026-08-27 接线 |
 | M365_ENABLE_MEMORY_V2 / DEEP_WORK / COMPUTER_USE / REALTIME_VOICE / SYSTEM_PROMPT_OVERRIDE / DESIGNER_IMAGE_GEN_4O / CODE_CANVAS / SYDNEY_RECONNECT | ⚠️ 播种至 settings | 启动时读入 settings.featureFlags（memoryV2 默认开、其余默认关）；memoryV2 实际生效（门控 memory optionsSets），其余 flag 存储待逐个核对上游 payload 效果后接线 |
 | M365_LISTEN / M365_DATA_DIR / M365_CONFIG / M365_TOKEN_CACHE / M365_SESSION_CACHE / M365_API_KEYS / M365_USAGE_LOG / M365_DEBUG_LOG / M365_PERSIST_INTERVAL | — **[平台]** 无文件系统/端口概念 |
 | M365_PROXY_POOL / M365_PROXY_INSECURE_TLS / M365_PROXY_HEALTH_URL / outbound.EnvProxy | ❌ **[平台]** 代理池裁剪 |
@@ -153,7 +153,7 @@
 | M365_PUBLIC_IDENTITY_POLICY | ❌ 随 public_identity 未移植 |
 | M365_TRACE | ❌ **[未做]** 详细 trace 日志未实现（console.error 关键路径已有） |
 | M365_USER_SESSION_TTL_MINUTES / M365_ACCOUNT_DEFAULT_CONCURRENCY | ⚠️ 后者经 settings 生效 | 并发上限为控制台可编辑设置 accountConcurrencyLimit（默认 8，由 CoordinationDO 信号量执行）；userSessions TTL 固定 7 天，TTL 旋钮未读取 |
-| M365_AUTHORIZE_ENDPOINT / M365_TOKEN_ENDPOINT / M365_DEVICE_ENDPOINT / M365_DEVICE_TOKEN_ENDPOINT | ⚠️ authorize/token 主端点可由 authority 推导覆盖；四个精确端点覆写变量未单独读取 |
+| M365_AUTHORIZE_ENDPOINT / M365_TOKEN_ENDPOINT / M365_DEVICE_ENDPOINT / M365_DEVICE_TOKEN_ENDPOINT | ✅ 生效 | 2026-08-27 对齐上游 config.go：四个精确端点覆写变量优先于 authority 推导（oauthConfig/effectiveOAuthConfig）；ROPC 端点统一走 cfg.tokenEndpoint（原硬编码 organizations 路径） |
 
 ---
 

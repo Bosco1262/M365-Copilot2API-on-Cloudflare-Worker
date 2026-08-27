@@ -14,7 +14,9 @@ export interface TextHoldback {
   buffered(): string;
 }
 
-const RUNE_HOLDBACK = 8;
+// Mirrors upstream: server.go's streaming branch replaced the old 8-rune
+// threshold with a 3-rune buffer (enough to detect "```") to cut tail latency.
+const RUNE_HOLDBACK = 3;
 
 export function createTextHoldback(hasTools: boolean): TextHoldback {
   let total = "";

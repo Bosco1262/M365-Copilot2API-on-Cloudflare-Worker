@@ -144,7 +144,18 @@ describe("streamed router pre-call", () => {
     const raw = await rawPromise;
 
     expect(chatMock).toHaveBeenCalledTimes(2); // router + answer turn
-    expect(raw).toContain("直接回答");
+    // Concatenate the streamed content deltas (chunk split points follow the
+    // holdback rune boundary and are not part of the contract).
+    const emitted = [...raw.matchAll(/"delta":\s*({[^}]*})/g)]
+      .map((m) => {
+        try {
+          return (JSON.parse(m[1]) as { content?: string }).content ?? "";
+        } catch {
+          return "";
+        }
+      })
+      .join("");
+    expect(emitted).toContain("直接回答");
     expect(raw).not.toContain("tool_calls");
   });
 });

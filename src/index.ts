@@ -116,11 +116,30 @@ router.prefix("/v1/images/files/", handleGeneratedImageFile);
 // Not yet ported (later phases):
 const NOT_PORTED: Record<string, string> = {};
 
+// Security headers parity with upstream security_http.go: nosniff, DENY,
+// no-referrer, Permissions-Policy and a full CSP are applied to every
+// response (static pages additionally carry CSP via assets/_headers, whose
+// policy must stay in sync with CSP below).
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 function withSecurityHeaders(resp: Response): Response {
   const headers = new Headers(resp.headers);
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("X-Frame-Options", "DENY");
   headers.set("Referrer-Policy", "no-referrer");
+  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  headers.set("Content-Security-Policy", CSP);
   return new Response(resp.body, { status: resp.status, headers });
 }
 
@@ -197,10 +216,10 @@ async function handleRequest(env: Env, req: Request, waitUntil: (p: Promise<unkn
       if (resp.ok) {
         const headers = new Headers(resp.headers);
         headers.set("Cache-Control", "no-store");
-        return withSecurityHeaders(new Response(resp.body, { status: resp.status, headers }));
+        return withRequestId(withSecurityHeaders(new Response(resp.body, { status: resp.status, headers })), ctx);
       }
     }
-    return withSecurityHeaders(await handlePage(ctx));
+    return withRequestId(withSecurityHeaders(await handlePage(ctx)), ctx);
   }
 
   const denied = await authorize(ctx);

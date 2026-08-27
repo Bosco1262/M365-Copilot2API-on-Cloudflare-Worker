@@ -13,6 +13,7 @@ import {
   resolveAccount,
   markFailure,
   markSuccess,
+  markCall,
 } from "../pipeline/account";
 import { chat as chathubChat, uploadAttachments } from "../chathub/client";
 import { ORIGIN, USER_AGENT, isImageURL } from "../chathub/protocol";
@@ -188,6 +189,7 @@ async function runGeneration(
 
   let res;
   try {
+    ctx.waitUntil(markCall(ctx.env, acc.id).catch(() => {}));
     res = await chathubChat(
       { accessToken: acc.accessToken, oid: acc.oid, tid: acc.tid },
       { text: prompt, tone: "magic", attachments },

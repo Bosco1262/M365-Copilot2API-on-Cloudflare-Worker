@@ -220,3 +220,17 @@
 **部署步骤**：`npx wrangler d1 migrations apply m365-copilot2api --remote`（应用 0003）→ `npx wrangler deploy`。KV 旧数据（accounts / api-keys / resolver-sessions / user_sessions / sessions）在首次对应读取时自动迁移，无需手工操作。
 
 **回滚**：任意时刻 revert 代码即可——所有写路径仍镜像维护 KV 旧文档；或直接移除 DB 绑定回退 KV 行为（但 0003 之后新写的数据只存在于 D1）。
+
+## 五、第二轮实施记录（同日，重新评估后）
+
+对 KV/D1/DO 分配做第二轮全量复核，落实 4 项调整（`tsc --noEmit`、194 个单元测试、`wrangler deploy --dry-run` 均通过）：
+
+| 项 | 级别 | 状态 | 实现方式 | 涉及文件 |
+|---|---|---|---|---|
+| KV 镜像降频 | 中 | ✅ | accounts 仅**新增**账号时镜像（`d1Upsert` 返回 inserted 标志），delete 保留镜像；setScheduleEnabled / updateRefreshToken / markStatus 移除镜像（高频写不再整文档 RMW）。api-keys 仅 **revoked 状态变化**时镜像，create/delete 保留。D1 失败回退 KV 路径不变 | `src/store/accounts.ts`、`src/store/keys.ts` |
+| 账号列表 DO 缓存 | 中 | ✅ | CoordinationDO 内存缓存账号列表（TTL 30s）；`GET /accounts-cache`（未初始化→cached:false）、`POST /accounts-cache/update`、`POST /accounts-cache/invalidate`。`listAccounts` 热路径优先走 DO 缓存，miss 时懒回填 KV 后全表查 D1 并推回；新增/删除账号时 invalidate。DO 只存不查，回源逻辑留在 accounts.ts | `src/do/coordination.ts`、`src/store/accounts.ts` |
+| resolver-index 迁 D1 | 低 | ✅ | 新表 `resolver_sessions`（0004 迁移）；loadIndex 走 SQL（窗口过滤 + lastUsedAt DESC + LIMIT 1000），bind 单行 UPSERT + 超限 trim，touch 走 UPDATE，unbind 按 conversation_id 删除；KV 文档保留为无 DB 兜底 + 空表懒回填源 | `migrations/0004_resolver_sessions.sql`、`src/pipeline/resolver.ts` |
+| account-health 上收 DO | 低 | ✅ | CoordState 增加 `health`；DO 端点 `/health/available`、`/health/mark-failure`（kind: auth/rate）、`/health/image-limited`、`/health/mark-success`、`/health/clear`、`/health/snapshot`，cooldown 过期并入 reap/alarm。pipeline/account.ts 六个函数 DO 优先、KV 仅作无 DO 兜底（advisory） | `src/do/coordination.ts`、`src/pipeline/account.ts` |
+| McpSessionDO | — | 不变 | 每会话一实例的 SSE 信箱职责不可替代，仅纳入 DO 免费实例容量规划 | — |
+
+**说明**：镜像降频后，KV 中 `accounts` / `api-keys` 文档的 status/schedule/refreshToken/lastUsedAt 等字段可能滞后；这是有意为之——KV 文档仅作为**结构性回滚安全网**（账号/key 的存在与撤销状态），高频字段以 D1 为真相。账号列表缓存 30s TTL 对管理端可见性影响可忽略（结构变更即时 invalidate）。

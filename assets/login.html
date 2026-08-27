@@ -1,149 +1,646 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>M365 Copilot2API</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet"><script src="/vendor/lucide.min.js"></script><style>
-:root{color-scheme:light dark;--bg:#f5f5f7;--surface:rgba(255,255,255,0.72);--surface-solid:#fff;--surface-border:rgba(255,255,255,0.5);--line:rgba(0,0,0,0.08);--text:#1d1d1f;--muted:#86868b;--primary:#1d1d1f;--primary-hover:#000;--accent:#0071e3;--red:#ff3b30;--green:#34c759;--shadow:0 8px 40px rgba(0,0,0,0.08);--shadow-lg:0 24px 60px rgba(0,0,0,0.12);--radius:14px;--radius-sm:8px;--ease-out:cubic-bezier(0.23,1,0.32,1);--ease-in-out:cubic-bezier(0.77,0,0.175,1)}
-@media(prefers-color-scheme:dark){:root{--bg:#1c1c1e;--surface:rgba(44,44,46,0.8);--surface-solid:#2c2c2e;--surface-border:rgba(255,255,255,0.08);--line:rgba(255,255,255,0.1);--text:#f5f5f7;--muted:#98989d;--primary:#f5f5f7;--primary-hover:#fff;--accent:#0a84ff;--shadow:0 8px 40px rgba(0,0,0,0.3);--shadow-lg:0 24px 60px rgba(0,0,0,0.4)}}
-*{box-sizing:border-box;margin:0}
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:"Inter","SF Pro Display","Noto Sans SC",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;font-size:15px;line-height:1.4706;-webkit-font-smoothing:antialiased;animation:fadeIn .5s var(--ease-out)}
-@keyframes fadeIn{from{opacity:0}}
-@keyframes slideUp{from{opacity:0;transform:translateY(12px)}}
-@keyframes spin{to{transform:rotate(360deg)}}
-.card{position:relative;width:min(400px,calc(100vw - 32px));background:var(--surface);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);border:1px solid var(--surface-border);border-radius:var(--radius);padding:40px;box-shadow:var(--shadow-lg);animation:slideUp .6s var(--ease-out) .1s both}
-.brand{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600;letter-spacing:-0.01em;padding-bottom:20px;border-bottom:1px solid var(--line);margin-bottom:28px;color:var(--text)}
-.brand .logo-mark{width:22px;height:22px;display:grid;grid-template-columns:repeat(2,1fr);gap:2px;padding:2px;flex-shrink:0;border-radius:5px;overflow:hidden}
-.brand .logo-mark span{display:block;border-radius:1.5px}
-.brand .logo-mark span:nth-child(1){background:#f25022}.brand .logo-mark span:nth-child(2){background:#7fba00}.brand .logo-mark span:nth-child(3){background:#00a4ef}.brand .logo-mark span:nth-child(4){background:#ffb900}
-h1{font-size:22px;font-weight:700;letter-spacing:-0.02em;margin:0 0 6px;color:var(--text)}
-p{color:var(--muted);font-size:14px;margin:0 0 24px;line-height:1.5}
-.warning{padding:12px 14px;background:rgba(255,59,48,0.08);border:1px solid rgba(255,59,48,0.2);color:var(--red);margin-bottom:20px;font-size:13px;border-radius:var(--radius-sm);line-height:1.5}
-.warning code{font-weight:600}
-.field{margin:20px 0}
-.field:first-of-type{margin-top:0}
-label{display:block;font-weight:500;font-size:13px;margin-bottom:8px;color:var(--text)}
-.password-wrap{position:relative}
-.password-wrap input{padding-right:40px}
-.password-toggle{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);cursor:pointer;padding:4px 6px;margin:0;width:auto;font-size:15px;line-height:1;border-radius:6px;min-height:auto;transition:color .2s ease}
-.password-toggle:hover{color:var(--text);background:transparent;box-shadow:none}
-input{width:100%;padding:10px 14px;border:1.5px solid var(--line);border-radius:var(--radius-sm);font:inherit;font-size:15px;background:rgba(255,255,255,0.5);color:var(--text);outline:0;transition:border-color .2s ease,box-shadow .2s ease,background .2s ease}
-@media(prefers-color-scheme:dark){input{background:rgba(0,0,0,0.2)}}
-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,113,227,0.15);background:rgba(255,255,255,0.7)}
-@media(prefers-color-scheme:dark){input:focus{background:rgba(0,0,0,0.3);box-shadow:0 0 0 3px rgba(10,132,255,0.2)}}
-input::placeholder{color:var(--muted)}
-button{width:100%;border:0;background:var(--primary);color:var(--bg);padding:10px 16px;margin-top:20px;font:inherit;font-size:15px;font-weight:600;cursor:pointer;border-radius:var(--radius-sm);transition:background .2s ease,transform .15s var(--ease-out),box-shadow .2s ease;position:relative;overflow:hidden;min-height:44px}
-button:hover{background:var(--primary-hover);box-shadow:var(--shadow)}
-button:active{transform:scale(0.97)}
-button:disabled{cursor:not-allowed;opacity:0.5;transform:none!important;box-shadow:none!important}
-button.loading{color:transparent;pointer-events:none}
-button.loading::after{content:"";position:absolute;inset:0;margin:auto;width:20px;height:20px;border:2.5px solid var(--bg);border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
-.error{color:var(--red);font-size:13px;margin-top:12px;min-height:20px;transition:opacity .2s ease}
-[hidden]{display:none!important}
-.lang-select{position:absolute;top:16px;right:16px;width:auto;min-width:0;padding:3px 8px;margin:0;font-size:12px;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:6px;cursor:pointer;min-height:auto;font-weight:400}
-.lang-select:hover{color:var(--text)}
-.lang-select:focus{box-shadow:none;border-color:var(--line)}
-#login,#change{animation:slideUp .5s var(--ease-out) .15s both}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
-</style>
-<script>/*I18N-START*/
-window.I18N_DICT={
- en:{
-  "login.title":"Administrator Login",
-  "login.subtitle":"Enter the administrator password to access the dashboard",
-  "login.warning":"The default password is <code>admin123</code><br>Change the administrator password right after the first login.",
-  "login.password":"Admin Password",
-  "login.toggle":"Toggle password visibility",
-  "login.submit":"Sign In",
-  "login.changeTitle":"Please change the default password immediately",
-  "login.changeWarning":"You are still using the initial password. Account pool, OAuth credentials and API keys remain unprotected until a new password is set.",
-  "login.current":"Current Password",
-  "login.next":"New Password (at least 6 characters)",
-  "login.confirm":"Confirm New Password",
-  "login.changeSubmit":"Change Password And Sign In Again",
-  "login.errMismatch":"The two new passwords do not match.",
-  "login.errMin":"New password must be at least 6 characters.",
-  "login.err429":"Too many failed attempts. Please try again later.",
-  "login.okRedirect":"Password changed. All previous sessions were invalidated; please sign in with the new password."
- },
- "zh-CN":{
-  "login.title":"管理员登录",
-  "login.subtitle":"请输入管理员密码以访问仪表盘",
-  "login.warning":"默认密码：<code>admin123</code><br>首次登录后请立即修改管理员密码",
-  "login.password":"管理员密码",
-  "login.toggle":"切换密码可见性",
-  "login.submit":"登录",
-  "login.changeTitle":"请立即修改默认密码",
-  "login.changeWarning":"您仍在使用初始密码。为保护账号池、OAuth 凭据和 API 密钥，在设置新密码前管理功能不可用。",
-  "login.current":"当前密码",
-  "login.next":"新密码（至少 6 个字符）",
-  "login.confirm":"确认新密码",
-  "login.changeSubmit":"修改密码并重新登录",
-  "login.errMismatch":"两次输入的新密码不一致",
-  "login.errMin":"新密码长度至少为 6 个字符",
-  "login.err429":"登录失败次数过多，请稍后重试。",
-  "login.okRedirect":"密码修改成功，所有之前的会话已失效，请用新密码重新登录。"
- }
-};
-/*@I18N-END*/</script>
-<script src="/vendor/i18n.js"></script>
-</head>
-<body>
-<main class="card">
-  <select id="langSelect" class="lang-select"><option value="en">EN</option><option value="zh-CN">中文</option></select>
-  <div class="brand"><span class="logo-mark"><span></span><span></span><span></span><span></span></span>M365 Copilot2API</div>
-  <section id="login">
-    <h1 data-i18n="login.title">Administrator Login</h1>
-    <p data-i18n="login.subtitle">Enter the administrator password to access the dashboard</p>
-    <div class="warning" data-i18n-html="login.warning">The default password is <code>admin123</code><br>Change the administrator password right after the first login.</div>
-    <form id="loginForm">
-      <div class="field">
-        <label for="password" data-i18n="login.password">Admin Password</label>
-        <div class="password-wrap">
-          <input id="password" type="password" autocomplete="current-password" required autofocus>
-          <button type="button" class="password-toggle" onclick="togglePassword(this)" aria-label="Toggle password visibility" data-i18n-aria="login.toggle"><i data-lucide="eye" style="width:18px;height:18px;display:flex"></i></button>
-        </div>
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>M365 Copilot2API</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="/vendor/lucide.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f5f7;
+        --surface: rgba(255, 255, 255, 0.72);
+        --surface-solid: #fff;
+        --surface-border: rgba(255, 255, 255, 0.5);
+        --line: rgba(0, 0, 0, 0.08);
+        --text: #1d1d1f;
+        --muted: #86868b;
+        --primary: #1d1d1f;
+        --primary-hover: #000;
+        --accent: #0071e3;
+        --red: #ff3b30;
+        --green: #34c759;
+        --shadow: 0 8px 40px rgba(0, 0, 0, 0.08);
+        --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.12);
+        --radius: 14px;
+        --radius-sm: 8px;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1c1e;
+          --surface: rgba(44, 44, 46, 0.8);
+          --surface-solid: #2c2c2e;
+          --surface-border: rgba(255, 255, 255, 0.08);
+          --line: rgba(255, 255, 255, 0.1);
+          --text: #f5f5f7;
+          --muted: #98989d;
+          --primary: #f5f5f7;
+          --primary-hover: #fff;
+          --accent: #0a84ff;
+          --shadow: 0 8px 40px rgba(0, 0, 0, 0.3);
+          --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.4);
+        }
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          "Inter",
+          "SF Pro Display",
+          "Noto Sans SC",
+          -apple-system,
+          BlinkMacSystemFont,
+          system-ui,
+          sans-serif;
+        font-size: 15px;
+        line-height: 1.4706;
+        -webkit-font-smoothing: antialiased;
+        animation: fadeIn 0.5s var(--ease-out);
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+        }
+      }
+      @keyframes slideUp {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .card {
+        position: relative;
+        width: min(400px, calc(100vw - 32px));
+        background: var(--surface);
+        -webkit-backdrop-filter: blur(40px) saturate(180%);
+        backdrop-filter: blur(40px) saturate(180%);
+        border: 1px solid var(--surface-border);
+        border-radius: var(--radius);
+        padding: 40px;
+        box-shadow: var(--shadow-lg);
+        animation: slideUp 0.6s var(--ease-out) 0.1s both;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 28px;
+        color: var(--text);
+      }
+      .brand .logo-mark {
+        width: 22px;
+        height: 22px;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 2px;
+        padding: 2px;
+        flex-shrink: 0;
+        border-radius: 5px;
+        overflow: hidden;
+      }
+      .brand .logo-mark span {
+        display: block;
+        border-radius: 1.5px;
+      }
+      .brand .logo-mark span:nth-child(1) {
+        background: #f25022;
+      }
+      .brand .logo-mark span:nth-child(2) {
+        background: #7fba00;
+      }
+      .brand .logo-mark span:nth-child(3) {
+        background: #00a4ef;
+      }
+      .brand .logo-mark span:nth-child(4) {
+        background: #ffb900;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        margin: 0 0 6px;
+        color: var(--text);
+      }
+      p {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 24px;
+        line-height: 1.5;
+      }
+      .warning {
+        padding: 12px 14px;
+        background: rgba(255, 59, 48, 0.08);
+        border: 1px solid rgba(255, 59, 48, 0.2);
+        color: var(--red);
+        margin-bottom: 20px;
+        font-size: 13px;
+        border-radius: var(--radius-sm);
+        line-height: 1.5;
+      }
+      .warning code {
+        font-weight: 600;
+      }
+      .field {
+        margin: 20px 0;
+      }
+      .field:first-of-type {
+        margin-top: 0;
+      }
+      label {
+        display: block;
+        font-weight: 500;
+        font-size: 13px;
+        margin-bottom: 8px;
+        color: var(--text);
+      }
+      .password-wrap {
+        position: relative;
+      }
+      .password-wrap input {
+        padding-right: 40px;
+      }
+      .password-toggle {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: 0;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 4px 6px;
+        margin: 0;
+        width: auto;
+        font-size: 15px;
+        line-height: 1;
+        border-radius: 6px;
+        min-height: auto;
+        transition: color 0.2s ease;
+      }
+      .password-toggle:hover {
+        color: var(--text);
+        background: transparent;
+        box-shadow: none;
+      }
+      input {
+        width: 100%;
+        padding: 10px 14px;
+        border: 1.5px solid var(--line);
+        border-radius: var(--radius-sm);
+        font: inherit;
+        font-size: 15px;
+        background: rgba(255, 255, 255, 0.5);
+        color: var(--text);
+        outline: 0;
+        transition:
+          border-color 0.2s ease,
+          box-shadow 0.2s ease,
+          background 0.2s ease;
+      }
+      @media (prefers-color-scheme: dark) {
+        input {
+          background: rgba(0, 0, 0, 0.2);
+        }
+      }
+      input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
+        background: rgba(255, 255, 255, 0.7);
+      }
+      @media (prefers-color-scheme: dark) {
+        input:focus {
+          background: rgba(0, 0, 0, 0.3);
+          box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
+        }
+      }
+      input::placeholder {
+        color: var(--muted);
+      }
+      button {
+        width: 100%;
+        border: 0;
+        background: var(--primary);
+        color: var(--bg);
+        padding: 10px 16px;
+        margin-top: 20px;
+        font: inherit;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        border-radius: var(--radius-sm);
+        transition:
+          background 0.2s ease,
+          transform 0.15s var(--ease-out),
+          box-shadow 0.2s ease;
+        position: relative;
+        overflow: hidden;
+        min-height: 44px;
+      }
+      button:hover {
+        background: var(--primary-hover);
+        box-shadow: var(--shadow);
+      }
+      button:active {
+        transform: scale(0.97);
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+        transform: none !important;
+        box-shadow: none !important;
+      }
+      button.loading {
+        color: transparent;
+        pointer-events: none;
+      }
+      button.loading::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        width: 20px;
+        height: 20px;
+        border: 2.5px solid var(--bg);
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+      }
+      .error {
+        color: var(--red);
+        font-size: 13px;
+        margin-top: 12px;
+        min-height: 20px;
+        transition: opacity 0.2s ease;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .lang-select {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: auto;
+        min-width: 0;
+        padding: 3px 8px;
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+        min-height: auto;
+        font-weight: 400;
+      }
+      .lang-select:hover {
+        color: var(--text);
+      }
+      .lang-select:focus {
+        box-shadow: none;
+        border-color: var(--line);
+      }
+      #login,
+      #change {
+        animation: slideUp 0.5s var(--ease-out) 0.15s both;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+        }
+      }
+    </style>
+    <script>
+      /*I18N-START*/
+      window.I18N_DICT = {
+        en: {
+          "login.title": "Administrator Login",
+          "login.subtitle":
+            "Enter the administrator password to access the dashboard",
+          "login.warning":
+            "The default password is <code>admin123</code><br>Change the administrator password right after the first login.",
+          "login.password": "Admin Password",
+          "login.toggle": "Toggle password visibility",
+          "login.submit": "Sign In",
+          "login.changeTitle": "Please change the default password immediately",
+          "login.changeWarning":
+            "You are still using the initial password. Account pool, OAuth credentials and API keys remain unprotected until a new password is set.",
+          "login.current": "Current Password",
+          "login.next": "New Password (at least 6 characters)",
+          "login.confirm": "Confirm New Password",
+          "login.changeSubmit": "Change Password And Sign In Again",
+          "login.errMismatch": "The two new passwords do not match.",
+          "login.errMin": "New password must be at least 6 characters.",
+          "login.err429": "Too many failed attempts. Please try again later.",
+          "login.okRedirect":
+            "Password changed. All previous sessions were invalidated; please sign in with the new password.",
+        },
+        "zh-CN": {
+          "login.title": "管理员登录",
+          "login.subtitle": "请输入管理员密码以访问仪表盘",
+          "login.warning":
+            "默认密码：<code>admin123</code><br>首次登录后请立即修改管理员密码",
+          "login.password": "管理员密码",
+          "login.toggle": "切换密码可见性",
+          "login.submit": "登录",
+          "login.changeTitle": "请立即修改默认密码",
+          "login.changeWarning":
+            "您仍在使用初始密码。为保护账号池、OAuth 凭据和 API 密钥，在设置新密码前管理功能不可用。",
+          "login.current": "当前密码",
+          "login.next": "新密码（至少 6 个字符）",
+          "login.confirm": "确认新密码",
+          "login.changeSubmit": "修改密码并重新登录",
+          "login.errMismatch": "两次输入的新密码不一致",
+          "login.errMin": "新密码长度至少为 6 个字符",
+          "login.err429": "登录失败次数过多，请稍后重试。",
+          "login.okRedirect":
+            "密码修改成功，所有之前的会话已失效，请用新密码重新登录。",
+        },
+      };
+      /*@I18N-END*/
+    </script>
+    <script src="/vendor/i18n.js"></script>
+  </head>
+  <body>
+    <main class="card">
+      <select id="langSelect" class="lang-select">
+        <option value="en">EN</option>
+        <option value="zh-CN">中文</option>
+      </select>
+      <div class="brand">
+        <span class="logo-mark"
+          ><span></span><span></span><span></span><span></span></span
+        >M365 Copilot2API
       </div>
-      <button id="loginBtn" data-i18n="login.submit">Sign In</button>
-    </form>
-    <div class="error" id="loginError"></div>
-  </section>
-  <section id="change" hidden>
-    <h1 data-i18n="login.changeTitle">Please change the default password immediately</h1>
-    <div class="warning" data-i18n-html="login.changeWarning">You are still using the initial password. Account pool, OAuth credentials and API keys remain unprotected until a new password is set.</div>
-    <form id="changeForm">
-      <div class="field">
-        <label for="current" data-i18n="login.current">Current Password</label>
-        <div class="password-wrap">
-          <input id="current" type="password" autocomplete="current-password" required>
-          <button type="button" class="password-toggle" onclick="togglePassword(this)" aria-label="Toggle password visibility" data-i18n-aria="login.toggle"><i data-lucide="eye" style="width:18px;height:18px;display:flex"></i></button>
+      <section id="login">
+        <h1 data-i18n="login.title">Administrator Login</h1>
+        <p data-i18n="login.subtitle">
+          Enter the administrator password to access the dashboard
+        </p>
+        <div class="warning" data-i18n-html="login.warning">
+          The default password is <code>admin123</code><br />Change the
+          administrator password right after the first login.
         </div>
-      </div>
-      <div class="field">
-        <label for="next" data-i18n="login.next">New Password (at least 6 characters)</label>
-        <div class="password-wrap">
-          <input id="next" type="password" autocomplete="new-password" minlength="6" required>
-          <button type="button" class="password-toggle" onclick="togglePassword(this)" aria-label="Toggle password visibility" data-i18n-aria="login.toggle"><i data-lucide="eye" style="width:18px;height:18px;display:flex"></i></button>
+        <form id="loginForm">
+          <div class="field">
+            <label for="password" data-i18n="login.password"
+              >Admin Password</label
+            >
+            <div class="password-wrap">
+              <input
+                id="password"
+                type="password"
+                autocomplete="current-password"
+                required
+                autofocus
+              />
+              <button
+                type="button"
+                class="password-toggle"
+                onclick="togglePassword(this)"
+                aria-label="Toggle password visibility"
+                data-i18n-aria="login.toggle"
+              >
+                <i
+                  data-lucide="eye"
+                  style="width: 18px; height: 18px; display: flex"
+                ></i>
+              </button>
+            </div>
+          </div>
+          <button id="loginBtn" data-i18n="login.submit">Sign In</button>
+        </form>
+        <div class="error" id="loginError"></div>
+      </section>
+      <section id="change" hidden>
+        <h1 data-i18n="login.changeTitle">
+          Please change the default password immediately
+        </h1>
+        <div class="warning" data-i18n-html="login.changeWarning">
+          You are still using the initial password. Account pool, OAuth
+          credentials and API keys remain unprotected until a new password is
+          set.
         </div>
-      </div>
-      <div class="field">
-        <label for="confirm" data-i18n="login.confirm">Confirm New Password</label>
-        <div class="password-wrap">
-          <input id="confirm" type="password" autocomplete="new-password" minlength="6" required>
-          <button type="button" class="password-toggle" onclick="togglePassword(this)" aria-label="Toggle password visibility" data-i18n-aria="login.toggle"><i data-lucide="eye" style="width:18px;height:18px;display:flex"></i></button>
-        </div>
-      </div>
-      <button id="changeBtn" data-i18n="login.changeSubmit">Change Password And Sign In Again</button>
-    </form>
-    <div class="error" id="changeError"></div>
-  </section>
-</main>
-<script>
-try{lucide.createIcons();}catch(e){}
-const $=id=>document.getElementById(id);
-I18N.wireSelect($('langSelect'));
-function togglePassword(btn){const ico=btn.querySelector('[data-lucide]');const inp=btn.previousElementSibling;const isPassword=inp.type==='password';inp.type=isPassword?'text':'password';if(ico){try{ico.setAttribute('data-lucide',isPassword?'eye-off':'eye');lucide.createIcons()}catch(e){}}}
-function setLoading(btn,loading){if(loading){btn.disabled=true;btn.classList.add('loading')}else{btn.disabled=false;btn.classList.remove('loading')}}
-async function request(url,body){const r=await fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const raw=await r.text();let d={};try{d=JSON.parse(raw)}catch{}if(!r.ok){const e=new Error(d?.error?.message||raw||'Request failed');e.status=r.status;throw e}return d}
-function requireChange(current=''){$('login').hidden=true;$('change').hidden=false;if(current){$('current').value=current;}$('next').focus()}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();$('loginError').textContent='';const password=$('password').value;if(!password)return;setLoading($('loginBtn'),true);try{const d=await request('/api/admin/login',{password});if(d.must_change_password)requireChange(password);else location.replace('/')}catch(x){$('loginError').textContent=x.status===429?I18N.t('login.err429'):x.message}finally{setLoading($('loginBtn'),false)}});
-$('changeForm').addEventListener('submit',async e=>{e.preventDefault();$('changeError').textContent='';if($('next').value!==$('confirm').value){$('changeError').textContent=I18N.t('login.errMismatch');return}if($('next').value.length<6){$('changeError').textContent=I18N.t('login.errMin');return}setLoading($('changeBtn'),true);try{await request('/api/admin/change-password',{current_password:$('current').value,new_password:$('next').value});alert(I18N.t('login.okRedirect'));location.replace('/')}catch(x){$('changeError').textContent=x.message}finally{setLoading($('changeBtn'),false)}});
-fetch('/api/admin/session',{credentials:'same-origin'}).then(r=>r.json()).then(d=>{if(d.authenticated&&d.must_change_password){$('login').hidden=true;$('change').hidden=false;$('next').focus()}else if(d.authenticated)location.replace('/')}).catch(()=>{});
-</script>
-</body>
+        <form id="changeForm">
+          <div class="field">
+            <label for="current" data-i18n="login.current"
+              >Current Password</label
+            >
+            <div class="password-wrap">
+              <input
+                id="current"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                class="password-toggle"
+                onclick="togglePassword(this)"
+                aria-label="Toggle password visibility"
+                data-i18n-aria="login.toggle"
+              >
+                <i
+                  data-lucide="eye"
+                  style="width: 18px; height: 18px; display: flex"
+                ></i>
+              </button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="next" data-i18n="login.next"
+              >New Password (at least 6 characters)</label
+            >
+            <div class="password-wrap">
+              <input
+                id="next"
+                type="password"
+                autocomplete="new-password"
+                minlength="6"
+                required
+              />
+              <button
+                type="button"
+                class="password-toggle"
+                onclick="togglePassword(this)"
+                aria-label="Toggle password visibility"
+                data-i18n-aria="login.toggle"
+              >
+                <i
+                  data-lucide="eye"
+                  style="width: 18px; height: 18px; display: flex"
+                ></i>
+              </button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="confirm" data-i18n="login.confirm"
+              >Confirm New Password</label
+            >
+            <div class="password-wrap">
+              <input
+                id="confirm"
+                type="password"
+                autocomplete="new-password"
+                minlength="6"
+                required
+              />
+              <button
+                type="button"
+                class="password-toggle"
+                onclick="togglePassword(this)"
+                aria-label="Toggle password visibility"
+                data-i18n-aria="login.toggle"
+              >
+                <i
+                  data-lucide="eye"
+                  style="width: 18px; height: 18px; display: flex"
+                ></i>
+              </button>
+            </div>
+          </div>
+          <button id="changeBtn" data-i18n="login.changeSubmit">
+            Change Password And Sign In Again
+          </button>
+        </form>
+        <div class="error" id="changeError"></div>
+      </section>
+    </main>
+    <script>
+      try {
+        lucide.createIcons();
+      } catch (e) {}
+      const $ = (id) => document.getElementById(id);
+      I18N.wireSelect($("langSelect"));
+      function togglePassword(btn) {
+        const ico = btn.querySelector("[data-lucide]");
+        const inp = btn.previousElementSibling;
+        const isPassword = inp.type === "password";
+        inp.type = isPassword ? "text" : "password";
+        if (ico) {
+          try {
+            ico.setAttribute("data-lucide", isPassword ? "eye-off" : "eye");
+            lucide.createIcons();
+          } catch (e) {}
+        }
+      }
+      function setLoading(btn, loading) {
+        if (loading) {
+          btn.disabled = true;
+          btn.classList.add("loading");
+        } else {
+          btn.disabled = false;
+          btn.classList.remove("loading");
+        }
+      }
+      async function request(url, body) {
+        const r = await fetch(url, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const raw = await r.text();
+        let d = {};
+        try {
+          d = JSON.parse(raw);
+        } catch {}
+        if (!r.ok) {
+          const e = new Error(d?.error?.message || raw || "Request failed");
+          e.status = r.status;
+          throw e;
+        }
+        return d;
+      }
+      function requireChange(current = "") {
+        $("login").hidden = true;
+        $("change").hidden = false;
+        if (current) {
+          $("current").value = current;
+        }
+        $("next").focus();
+      }
+      $("loginForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        $("loginError").textContent = "";
+        const password = $("password").value;
+        if (!password) return;
+        setLoading($("loginBtn"), true);
+        try {
+          const d = await request("/api/admin/login", { password });
+          if (d.must_change_password) requireChange(password);
+          else location.replace("/");
+        } catch (x) {
+          $("loginError").textContent =
+            x.status === 429 ? I18N.t("login.err429") : x.message;
+        } finally {
+          setLoading($("loginBtn"), false);
+        }
+      });
+      $("changeForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        $("changeError").textContent = "";
+        if ($("next").value !== $("confirm").value) {
+          $("changeError").textContent = I18N.t("login.errMismatch");
+          return;
+        }
+        if ($("next").value.length < 6) {
+          $("changeError").textContent = I18N.t("login.errMin");
+          return;
+        }
+        setLoading($("changeBtn"), true);
+        try {
+          await request("/api/admin/change-password", {
+            current_password: $("current").value,
+            new_password: $("next").value,
+          });
+          alert(I18N.t("login.okRedirect"));
+          location.replace("/");
+        } catch (x) {
+          $("changeError").textContent = x.message;
+        } finally {
+          setLoading($("changeBtn"), false);
+        }
+      });
+      fetch("/api/admin/session", { credentials: "same-origin" })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.authenticated && d.must_change_password) {
+            $("login").hidden = true;
+            $("change").hidden = false;
+            $("next").focus();
+          } else if (d.authenticated) location.replace("/");
+        })
+        .catch(() => {});
+    </script>
+  </body>
 </html>

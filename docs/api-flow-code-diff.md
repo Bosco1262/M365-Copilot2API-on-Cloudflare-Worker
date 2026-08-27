@@ -52,7 +52,24 @@
 
 **第二轮已修复的 C 级**（2026-08-27）：C2 附件远程下载 + SSRF（scheme/IP/redirect 防护）、C3 DialError kind 分类（QUOTA_429 等 + classifyTransportError）、C4 lastHealthyAccount 偏好、C7 convCache 键粒度（account+model，去 API key 维度）、C9 Anthropic tool_use 结构化转换、C10 stop_sequences、C12 Responses 流式增量转换（streamResponsesAdapter 移植）、C14 流式元数据（x_m365_throttling/scores + m365-metrics，与 B14 同批完成）、C15 /v1/images/files/ 路由豁免、C17 CopilotTempSession、C18 控制台流引用标记剥离。**C8 核对后无需修复**——上游 `agent_ledger.go:66-68` 的 scopedCallID 实际就是 `"call_"+uuid.NewString()`（scope 参数未使用），与 TS 行为一致。
 
-**仍保留的 C 级差异**：C1 WS 连接池（Workers 平台限制）、C5 并发门控降级语义（DO 未绑定时静默不门控，有意保留）、C6 限流确认探测（confirmRateLimitNotice）、C11 Anthropic 流式形态（TS 真增量优于上游重放，保留）、C13 Responses 隔离（KV 1h TTL vs 上游内存 + pending tool 校验）、C16 admin 密码未配置检查。
+**仍保留的 C 级差异**：C1 WS 连接池（Workers 平台限制）、C5 并发门控降级语义（DO 未绑定时静默不门控，有意保留）、C11 Anthropic 流式形态（TS 真增量优于上游重放，保留）、C16 admin 密码未配置检查。
+
+**第四轮（2026-08-27 晚间，A3/A5/A9/A10 批量修复）**：
+
+| # | 差异 | 状态 |
+|---|---|---|
+| E1 | A3 兼容元数据 m365.events（`M365_INCLUDE_UPSTREAM_EVENTS`） | ✅ `m365Metadata` 升级为 `compatM365Metadata` 全字段版（throttling/suggestedResponses/offense/scores/conversationTransferToken/meteringInformation/spokenText/timestamps/storageMessageId/citations），events 开关按 envTrue 判定 |
+| E2 | A5 限流确认探测（confirmRateLimitNotice） | ✅ 新增 `markFailureAfterConfirm`：`RateLimitNotice` 时用新会话发 "Reply with exactly: OK"（tone magic，30s）探测，成功=假阳性不冷却，再限流=确认冷却；接入 failoverChat/非流式 catch/流式 catch。上游函数本身为死代码（未接线），TS 侧按语义接线 |
+| E3 | A9 AAD 精确端点覆写（4 个 env） | ✅ `oauthConfig`/`effectiveOAuthConfig` 支持 `M365_AUTHORIZE_ENDPOINT`/`M365_TOKEN_ENDPOINT`/`M365_DEVICE_ENDPOINT`/`M365_DEVICE_TOKEN_ENDPOINT`，env 精确值优先于 authority 推导；ROPC 端点统一走 `cfg.tokenEndpoint`（原硬编码 organizations 路径） |
+| E4 | A10 Responses 历史隔离 | ✅ 键升级 `resp-history/{tenant}/{session}/{id}`（`tenant\0session` 双隔离），StoredHistory 存 tenant/sessionId 并在 load 时校验；put 带 metadata.at，`maxResponsesPerTenant=256` 超限 list 前缀删最旧；MockKV 补 list 支持 |
+
+**第三轮（2026-08-27 下午，opencode 工具调用问题联动）**：
+
+| # | 差异 | 状态 |
+|---|---|---|
+| D1 | **流式 router 预调用缺失**（本审计 §0 流程图的 [router 模式] 步骤在 TS 仅实现于非流式；上游 server.go 流式路径 1810-1881 在 `stream:true + tools` 时先跑 `modelToolRouterPrompt` 预调用，命中即输出 tool_calls，NO_TOOL_NEEDED 才 fall-through 到文本流式。缺它导致流式请求的模型在 answer turn 看不到工具定义 → GPT-5.x 回落到自带 `/mnt/data` 沙箱幻觉） | ✅ 已补齐（`streamChatCompletions` 预调用块，与上游 1810-1881 对齐，含 failover + NO_TOOL_NEEDED fall-through） |
+| D2 | **holdback 尾缓冲 8-rune**（上游已从 8 改为 3：`server.go:1962` "replaces the old 8-rune threshold with a 3-rune buffer (enough to detect ```)"） | ✅ 已对齐（`src/api/holdback.ts` RUNE_HOLDBACK 8→3，含测试更新） |
+| D3 | prompt 级工具协议注入（`injectToolProtocol`，应对 `toolProtocolPrompt` 的 `hasPlugins` 恒 true 死代码，使流式/非流式/Anthropic 三条路径的模型都能看到 `<tools>` 定义与反沙盒指令） | ✅ 已实施（`prepareCore` 末尾注入；Go 版 `clientPlugins` 同样恒产插件，注入同样失效——该差异为上游与移植共同存在的问题，TS 侧已先行绕过） |
 
 ---
 
@@ -183,6 +200,8 @@
 - **schema 校验**：enum/type/required/additionalProperties/嵌套（`tools.ts:70-151` ↔ `tooldecision.go:19-107`）✅
 - **buildToolResponse 流式分片**：512 字符 UTF-8 安全切块 + finish_reason=tool_calls（`tools.ts:619-708` ↔ `tool_response.go:10-79`）✅
 - **tool refusal / sandbox hallucination 纠正重试**：两侧一致（`openai.ts:786-807` ↔ `server.go:2561-2576`）✅
+- **流式 router 预调用**（`streamChatCompletions` ↔ `server.go:1810-1881`）：流式 + tools 先跑 `modelToolRouterPrompt` 预调用，命中即输出 tool_calls，NO_TOOL_NEEDED 才 fall-through 到文本流式；2026-08-27 已补齐（D1）✅
+- **流式 holdback 尾缓冲 3-rune**（`holdback.ts` ↔ `server.go:1962`）：上游从 8-rune 降为 3-rune，TS 已对齐（D2）✅
 - **completionEvidence 门禁**（`ledger.ts` ↔ `server.go:2637-2639`）✅
 - **contentPolicy 503**（`openai.ts:773-783` ↔ `server.go:2627-2631`）✅
 - **tone=magic 空完成兜底**（`openai.ts:759-764` ↔ `server.go:2467-2475`）✅

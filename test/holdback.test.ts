@@ -2,14 +2,14 @@ import { describe, it, expect } from "vitest";
 import { createTextHoldback } from "../src/api/holdback";
 
 describe("createTextHoldback", () => {
-  it("passes text through when no tools declared, holding the last ~8 runes", () => {
+  it("passes text through when no tools declared, holding the last ~3 runes", () => {
     const h = createTextHoldback(false);
     const out: string[] = [];
-    h.push("Hello ", (t) => out.push(t)); // 6 runes <= 8 -> fully held
-    expect(out).toEqual([]);
+    h.push("Hello ", (t) => out.push(t)); // 6 runes > 3 -> prefix released
+    expect(out.join("")).toBe("Hel");
     h.push("brave world", (t) => out.push(t));
     const flushed = out.join("");
-    // Everything except the trailing 8 runes was released.
+    // Everything except the trailing 3 runes was released.
     expect(flushed.length).toBeGreaterThan(0);
     expect("Hello brave world".startsWith(flushed)).toBe(true);
     h.flush((t) => out.push(t));

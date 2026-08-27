@@ -6,6 +6,7 @@
 //          (router planning, fenced/native detection, streamed tool_calls).
 
 import type { HandlerCtx } from "../router";
+import type { Env } from "../env";
 import {
   jsonOut,
   writeOpenAIError,
@@ -28,6 +29,8 @@ import {
   markFailure,
   markSuccess,
   markImageLimited,
+  markCall,
+  updateThrottling,
 } from "../pipeline/account";
 import {
   resolveSession,
@@ -71,6 +74,7 @@ import {
   isRateLimited,
   isImageLimited,
   isEmptyCompletion,
+  RateLimitNotice,
 } from "../errors";
 import { coordAcquireAccount, coordReleaseAccount } from "../do/coordination";
 import { sseHeaders } from "./sse";
@@ -762,6 +766,9 @@ export async function chatCall(
   }
 ): Promise<ChatOutcome> {
   const settings = await getSettings(ctx.env);
+  // Port of account_concurrency.go chatWithAccount: every ChatHub round-trip
+  // counts against the account (callCount on /api/accounts, B8).
+  ctx.waitUntil(markCall(ctx.env, acc.id).catch(() => {}));
   const handlers: ChatHandlers = {};
   if (opts.onDelta) handlers.onDelta = opts.onDelta;
   if (opts.onReasoning) handlers.onReasoning = opts.onReasoning;
@@ -786,6 +793,45 @@ export function canFailover(prepared: PreparedRequest, err: unknown): boolean {
   return isRateLimited(err) || isAuthFailure(err);
 }
 
+// Port of server.go confirmRateLimitNotice + rateLimitProbePrompt: a
+// text-channel rate-limit notice is verified with a separate, fresh ChatHub
+// probe conversation before the account is cooled down — a single notice can
+// be a false positive, and cooling an account on one costs 30s of downtime.
+const RATE_LIMIT_PROBE_PROMPT = "Reply with exactly: OK";
+
+// markFailure wrapper: when the failure is a RateLimitNotice, probe first.
+// - probe succeeds        -> false positive, account stays healthy
+// - probe also rate-limits -> confirmed, cool down with the original error
+// - probe fails otherwise  -> cool down with the probe error
+async function markFailureAfterConfirm(ctx: HandlerCtx, acc: AccountToken, err: unknown): Promise<void> {
+  if (!(err instanceof RateLimitNotice)) {
+    await markFailure(ctx.env, acc.id, err);
+    return;
+  }
+  const settings = await getSettings(ctx.env);
+  try {
+    await chathubChat(
+      { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "", licenseType: settings.licenseType, scenario: settings.scenario },
+      {
+        text: RATE_LIMIT_PROBE_PROMPT,
+        tone: "magic",
+        featureFlags: settings.featureFlags ?? { memoryV2: true },
+        licenseType: settings.licenseType,
+        scenario: settings.scenario,
+      },
+      {},
+      { timeoutMs: 30_000 }
+    );
+    await markSuccess(ctx.env, acc.id);
+  } catch (probeErr) {
+    if (probeErr instanceof RateLimitNotice || isRateLimited(probeErr)) {
+      await markFailure(ctx.env, acc.id, err);
+    } else {
+      await markFailure(ctx.env, acc.id, probeErr);
+    }
+  }
+}
+
 export async function failoverChat(
   ctx: HandlerCtx,
   prepared: PreparedRequest,
@@ -808,10 +854,19 @@ export async function failoverChat(
       : prepared;
   try {
     const res = await chatCall(ctx, failoverPrepared, next, { onDelta: handlers?.onDelta, onReasoning: handlers?.onReasoning, onTool: handlers?.onTool });
+    // Upstream (server.go:1267-1271 / 2059-2066) marks the ORIGINAL account
+    // as failed once the retry succeeds, so the throttled/auth-failed account
+    // cools down instead of being re-picked by the next request (B7).
+    await markFailureAfterConfirm(ctx, failedAcc, firstErr);
+    if (isImageLimited(firstErr)) await markImageLimited(ctx.env, failedAcc.id);
     await markSuccess(ctx.env, next.id);
     return { acc: next, res };
   } catch (e2) {
-    await markFailure(ctx.env, next.id, e2);
+    // Second account also failed: both accounts are marked (upstream
+    // server.go:2068-2075).
+    await markFailureAfterConfirm(ctx, failedAcc, firstErr);
+    if (isImageLimited(firstErr)) await markImageLimited(ctx.env, failedAcc.id);
+    await markFailureAfterConfirm(ctx, next, e2);
     if (isImageLimited(e2)) await markImageLimited(ctx.env, next.id);
     throw e2; // upstream returns the second account's error (err2)
   }
@@ -1024,6 +1079,11 @@ export async function runCompletionsCore(
       }
     }
     await markSuccess(ctx.env, acc.id);
+    // Port of server.go:1294-1297: persist the latest ChatHub throttling
+    // payload for the console account view (B8).
+    if (res.throttling != null) {
+      ctx.waitUntil(updateThrottling(ctx.env, acc.id, res.throttling).catch(() => {}));
+    }
 
     // Content policy block -> 503 like upstream; the account is marked
     // failed so cooldown applies (server.go MarkFailure(ErrOffensiveContent)).
@@ -1160,7 +1220,7 @@ export async function runCompletionsCore(
       },
     };
   } catch (err) {
-    await markFailure(ctx.env, acc.id, err);
+    await markFailureAfterConfirm(ctx, acc, err);
     if (isImageLimited(err)) await markImageLimited(ctx.env, acc.id);
     return { ok: false, error: writeUpstreamError(err) };
   } finally {
@@ -1234,7 +1294,7 @@ export async function handleChatCompletions(ctx: HandlerCtx): Promise<Response> 
       created: Math.floor(Date.now() / 1000),
       model: s.model,
       choices: [{ index: 0, message: assistant, finish_reason: "stop" }],
-      m365: m365Metadata(s.res),
+      m365: m365Metadata(s.res, ctx.env),
       usage: {
         prompt_tokens: s.promptTokens,
         completion_tokens: s.completionTokens,
@@ -1246,17 +1306,65 @@ export async function handleChatCompletions(ctx: HandlerCtx): Promise<Response> 
   );
 }
 
-function m365Metadata(res: {
-  conversationId: string;
-  sessionId: string;
-  requestId: string;
-}): Record<string, unknown> {
-  return {
+// Port of compat_metadata.go compatM365Metadata: full m365 metadata object
+// incl. throttling/suggestions/offense/scores/transfer token/metering/
+// spokenText/timestamps/storageMessageId/citations, plus the raw upstream
+// events when M365_INCLUDE_UPSTREAM_EVENTS is enabled.
+function envTrue(name: string, env: Env): boolean {
+  const v = String((env as unknown as Record<string, string | undefined>)[name] ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+export function m365Metadata(
+  res: {
+    conversationId: string;
+    sessionId: string;
+    requestId: string;
+    throttling?: unknown;
+    suggestedResponses?: { text?: string }[];
+    offense?: string;
+    scores?: { label?: string; score?: number }[];
+    conversationTransferToken?: string;
+    meteringInformation?: unknown;
+    spokenText?: string;
+    timestamps?: { requestSent?: string };
+    storageMessageId?: string;
+    references?: Record<string, { targetLink?: string; title?: string; snippet?: string; providerDisplayName?: string }>;
+    events?: unknown[];
+  },
+  env?: Env
+): Record<string, unknown> {
+  const m: Record<string, unknown> = {
     conversationId: res.conversationId,
     sessionId: res.sessionId,
     requestId: res.requestId,
     usage_source: "unavailable_from_chathub",
   };
+  if (res.throttling != null) m["throttling"] = res.throttling;
+  if (res.suggestedResponses && res.suggestedResponses.length > 0) m["suggestedResponses"] = res.suggestedResponses;
+  if (res.offense && res.offense !== "") m["offense"] = res.offense;
+  if (res.scores && res.scores.length > 0) m["scores"] = res.scores;
+  if (res.conversationTransferToken && res.conversationTransferToken !== "") m["conversationTransferToken"] = res.conversationTransferToken;
+  if (res.meteringInformation != null) m["meteringInformation"] = res.meteringInformation;
+  if (res.spokenText && res.spokenText !== "") m["spokenText"] = res.spokenText;
+  if (res.timestamps?.requestSent && res.timestamps.requestSent !== "") m["timestamps"] = res.timestamps;
+  if (res.storageMessageId && res.storageMessageId !== "") m["storageMessageId"] = res.storageMessageId;
+  if (res.references && Object.keys(res.references).length > 0) {
+    const citations: Record<string, unknown>[] = [];
+    for (const [key, ref] of Object.entries(res.references)) {
+      const c: Record<string, unknown> = { key };
+      if (ref.targetLink && ref.targetLink !== "") c["url"] = ref.targetLink;
+      if (ref.title && ref.title !== "") c["title"] = ref.title;
+      if (ref.snippet && ref.snippet !== "") c["snippet"] = ref.snippet;
+      if (ref.providerDisplayName && ref.providerDisplayName !== "") c["provider"] = ref.providerDisplayName;
+      citations.push(c);
+    }
+    m["citations"] = citations;
+  }
+  if (env && envTrue("M365_INCLUDE_UPSTREAM_EVENTS", env) && res.events && res.events.length > 0) {
+    m["events"] = res.events;
+  }
+  return m;
 }
 
 // --------------------------------------------------------- streaming path ---
@@ -1422,6 +1530,7 @@ export async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): 
         onTool,
       };
       try {
+        ctx.waitUntil(markCall(ctx.env, acc.id).catch(() => {}));
         res = await chathubChat(
           { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "", licenseType: settings.licenseType, scenario: settings.scenario },
           chathubRequest(prepared, settings, acc, {}),
@@ -1438,6 +1547,9 @@ export async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): 
         }
       }
       await markSuccess(ctx.env, acc.id);
+      if (res.throttling != null) {
+        ctx.waitUntil(updateThrottling(ctx.env, acc.id, res.throttling).catch(() => {}));
+      }
       if (res.text && imageLimitNotice(res.text)) {
         await markImageLimited(ctx.env, acc.id);
       }
@@ -1573,7 +1685,7 @@ export async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): 
         })
       );
     } catch (err) {
-      await markFailure(ctx.env, acc.id, err);
+      await markFailureAfterConfirm(ctx, acc, err);
       if (isImageLimited(err)) await markImageLimited(ctx.env, acc.id);
       console.error("[chat:stream] upstream failure:", err instanceof Error ? err.stack : String(err));
       raw(
@@ -1593,4 +1705,6 @@ export async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): 
 }
 
 // Re-exported for protocol adapters.
-export { m365Metadata, type ChatOutcome };
+// m365Metadata is exported directly above; ChatOutcome re-exported for the
+// protocol adapters.
+export type { ChatOutcome };

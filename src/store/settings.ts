@@ -54,6 +54,10 @@ export interface RuntimeSettings {
   // Per-account concurrency cap (upstream account_concurrency default 8).
   // Enforcement lands with the Coordination DO; stored now for parity.
   accountConcurrencyLimit: number;
+  // Fallback cooldown for unclassified errors and the confirm-probe
+  // Retry-After (upstream settings.go RateLimitCooldownSeconds, env
+  // M365_RATE_LIMIT_COOLDOWN_SECONDS, 5-3600s).
+  rateLimitCooldownSeconds: number;
   // Optional external MCP servers bridged into the global tool registry.
   mcpServers?: string[];
   // Feature-flag knobs (env-seeded; see FeatureFlags).
@@ -82,6 +86,9 @@ export const CONFIGURABLE_CODEX_MODELS = [
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.5",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "codex-auto-review",
 ];
 
@@ -164,6 +171,7 @@ export function defaultSettings(env: Env): RuntimeSettings {
     licenseType: "Starter",
     scenario: "OfficeWebIncludedCopilot",
     accountConcurrencyLimit: 8,
+    rateLimitCooldownSeconds: envInt(env.M365_RATE_LIMIT_COOLDOWN_SECONDS, 30),
     mcpServers: [],
     featureFlags: envFeatureFlags(env),
   };
@@ -196,6 +204,8 @@ export function validateSettings(v: RuntimeSettings): string | null {
   if (v.chatTimeoutSeconds < 5 || v.chatTimeoutSeconds > 3600) return "聊天超时必须为 5-3600 秒";
   if (!(v.accountConcurrencyLimit >= 1 && v.accountConcurrencyLimit <= 64))
     return "账号并发上限必须为 1-64";
+  if (!(v.rateLimitCooldownSeconds >= 5 && v.rateLimitCooldownSeconds <= 3600))
+    return "限流冷却必须为 5-3600 秒";
   if (v.imageTimeoutSeconds < 5 || v.imageTimeoutSeconds > 3600) return "图片超时必须为 5-3600 秒";
   if (!["silent", "error", "warn", "info", "debug"].includes(v.logLevel))
     return "日志等级必须为 silent、error、warn、info 或 debug";

@@ -20,7 +20,7 @@
 	"kv_namespaces": [
 		{
 			"binding": "m365-copilot2api_KV",
-			"id": "6523e62855e040b8b7ce602c15a50012"
+			"id": "592209d05dcf45e49c0a0fd3cbc0ea6f"
 			// CLI deploys: uncomment and fill in your namespace id:
 			// , "id": "your-kv-namespace-id"
 		}
@@ -34,7 +34,7 @@
 		{
 			"binding": "DB",
 			"database_name": "m365-copilot2api",
-			"database_id": "1257ab3c-b740-4324-b286-a3bd8f3b2962",
+			"database_id": "a43501fb-b020-4324-a6c4-720508383207",
 			"migrations_dir": "migrations"
 		}
 	],
