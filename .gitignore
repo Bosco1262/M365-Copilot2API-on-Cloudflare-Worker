@@ -6,3 +6,4 @@ dist/
 server.log
 server-error.log
 data/
+.workbuddy/

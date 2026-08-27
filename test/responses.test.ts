@@ -29,12 +29,23 @@ describe("responsesToOpenAI", () => {
     expect(msgs[2]).toEqual({ role: "tool", tool_call_id: "call_a", content: "file1\nfile2" });
   });
 
-  it("skips function_call_progress metadata items", () => {
-    const { o } = responsesToOpenAI({
+  it("skips valid function_call_progress metadata items and rejects invalid ones", () => {
+    // Valid progress (call_id + message) is transport metadata, not a turn.
+    const ok = responsesToOpenAI({
       model: "m",
-      input: [{ type: "function_call_progress", call_id: "c" }, { role: "user", content: "go" }],
+      input: [
+        { type: "function_call_progress", call_id: "c", message: "running" },
+        { role: "user", content: "go" },
+      ],
     });
-    expect(o.messages).toHaveLength(1);
+    expect(ok.o.messages).toHaveLength(1);
+    expect(ok.error).toBeUndefined();
+    // Missing message -> invalid like upstream parseToolProgress.
+    const bad = responsesToOpenAI({
+      model: "m",
+      input: [{ type: "function_call_progress", call_id: "c" }],
+    });
+    expect(bad.error).toBe("invalid function_call_progress");
   });
 
   it("bridges custom exec tools to JSON schema functions", () => {

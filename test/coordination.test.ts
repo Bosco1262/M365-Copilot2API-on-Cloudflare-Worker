@@ -241,14 +241,18 @@ describe("store/accounts integration with COORD", () => {
     expect(rawDoc.nextIdx).toBe(0); // untouched once the DO owns the cursor
   });
 
-  it("nextAccount keeps the legacy KV rotation when unbound", async () => {
+  it("nextAccount keeps the KV rotation when unbound, via the dedicated cursor key", async () => {
     const kv = new MockKV();
     seedAccounts(kv, [ACC_A, ACC_B], 1);
     const env = { "m365-copilot2api_KV": kv } as never;
     expect((await nextAccount(env))?.id).toBe("b");
     expect((await nextAccount(env))?.id).toBe("a");
+    // Storage audit P1-1: the fallback cursor lives in its own tiny key and
+    // the legacy nextIdx seeds it on the first rotation (1 -> 2 -> 3).
+    const cursor = JSON.parse(kv.dump()["accounts-cursor"]) as { nextIdx: number };
+    expect(cursor.nextIdx).toBe(3);
     const rawDoc = JSON.parse(kv.dump()["accounts"]) as { nextIdx: number };
-    expect(rawDoc.nextIdx).toBe(1); // legacy rotation keeps writing nextIdx
+    expect(rawDoc.nextIdx).toBe(1); // accounts document no longer rewritten
   });
 
   it("ensureValid waits for a remote refresh holding the mutex instead of redeeming again", async () => {

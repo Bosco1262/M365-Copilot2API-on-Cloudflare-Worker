@@ -56,9 +56,17 @@ export async function handleConversationWhitelist(ctx: HandlerCtx): Promise<Resp
 }
 
 // ---------------------------------------------------------- userSessions ----
+// Storage audit P2-1: each binding is an independent KV key
+// `usess/<apiKeyHash>|<user>` with a 7-day TTL instead of one shared document
+// that every request rewrote (RMW lost updates + write amplification). The
+// legacy `user_sessions` document is migrated by the cron enumeration pass.
 
-const USER_SESSIONS_KEY = "user_sessions";
+const USER_SESSIONS_PREFIX = "usess/";
+const LEGACY_USER_SESSIONS_KEY = "user_sessions";
 const USER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const USER_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+// Bound on enumerated entries per cron sweep (subrequest budget guard).
+const USER_SESSION_MAX_SCAN = 200;
 
 export interface UserSessionEntry {
   conversationId: string;
@@ -67,11 +75,9 @@ export interface UserSessionEntry {
   lastUsedAt: string;
 }
 
-type UserSessionDoc = Record<string, UserSessionEntry>;
-
 // Tenant = SHA-256 of the API key so different keys never share bindings.
 function userSessionKey(apiKeyHash: string, user: string): string {
-  return apiKeyHash + "|" + user;
+  return USER_SESSIONS_PREFIX + apiKeyHash + "|" + user;
 }
 
 export async function getUserSession(
@@ -80,8 +86,7 @@ export async function getUserSession(
   user: string
 ): Promise<UserSessionEntry | null> {
   if (!apiKeyHash || !user) return null;
-  const doc = (await getJSON<UserSessionDoc>(kv(env), USER_SESSIONS_KEY)) ?? {};
-  const entry = doc[userSessionKey(apiKeyHash, user)];
+  const entry = await getJSON<UserSessionEntry>(kv(env), userSessionKey(apiKeyHash, user));
   if (!entry) return null;
   if (Date.now() - Date.parse(entry.lastUsedAt) > USER_SESSION_TTL_MS) return null;
   return entry;
@@ -96,28 +101,57 @@ export async function putUserSession(
   accountId: string
 ): Promise<void> {
   if (!apiKeyHash || !user || !conversationId) return;
-  const doc = (await getJSON<UserSessionDoc>(kv(env), USER_SESSIONS_KEY)) ?? {};
-  const now = Date.now();
-  for (const k of Object.keys(doc)) {
-    if (now - Date.parse(doc[k].lastUsedAt) > USER_SESSION_TTL_MS) delete doc[k];
-  }
-  doc[userSessionKey(apiKeyHash, user)] = {
-    conversationId,
-    sessionId,
-    accountId,
-    lastUsedAt: new Date(now).toISOString(),
-  };
-  await putJSON(kv(env), USER_SESSIONS_KEY, doc);
+  await putJSON(
+    kv(env),
+    userSessionKey(apiKeyHash, user),
+    {
+      conversationId,
+      sessionId,
+      accountId,
+      lastUsedAt: new Date().toISOString(),
+    } satisfies UserSessionEntry,
+    { expirationTtl: USER_SESSION_TTL_SECONDS }
+  );
 }
 
 export async function activeUserConversations(env: Env): Promise<Set<string>> {
   const out = new Set<string>();
-  const doc = (await getJSON<UserSessionDoc>(kv(env), USER_SESSIONS_KEY)) ?? {};
+  const store = kv(env);
   const now = Date.now();
-  for (const entry of Object.values(doc)) {
-    if (now - Date.parse(entry.lastUsedAt) <= USER_SESSION_TTL_MS) {
-      out.add(entry.conversationId);
+
+  // One-time legacy migration: copy the old shared document into individual
+  // keys, then clear it. Runs on the cron sweep only.
+  try {
+    const legacy = await getJSON<Record<string, UserSessionEntry>>(store, LEGACY_USER_SESSIONS_KEY);
+    if (legacy && Object.keys(legacy).length > 0) {
+      for (const [k, entry] of Object.entries(legacy)) {
+        if (now - Date.parse(entry.lastUsedAt) > USER_SESSION_TTL_MS) continue;
+        const sep = k.indexOf("|");
+        if (sep <= 0) continue;
+        await putUserSession(env, k.slice(0, sep), k.slice(sep + 1), entry.conversationId, entry.sessionId, entry.accountId);
+      }
+      await putJSON(store, LEGACY_USER_SESSIONS_KEY, {});
     }
+  } catch {
+    /* legacy migration is best-effort */
+  }
+
+  try {
+    let cursor: string | undefined;
+    let scanned = 0;
+    do {
+      const page = await store.list({ prefix: USER_SESSIONS_PREFIX, cursor });
+      for (const k of page.keys) {
+        if (scanned++ >= USER_SESSION_MAX_SCAN) return out;
+        const entry = await getJSON<UserSessionEntry>(store, k.name);
+        if (entry && now - Date.parse(entry.lastUsedAt) <= USER_SESSION_TTL_MS) {
+          out.add(entry.conversationId);
+        }
+      }
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+  } catch {
+    /* enumeration is best-effort */
   }
   return out;
 }
@@ -216,8 +250,9 @@ export async function captureDebugRecord(
           JSON.stringify(record)
         )
         .run();
-      // retention sweep (cheap, indexed by at)
-      await env.DB.prepare("DELETE FROM debug_records WHERE at < datetime('now','-7 days')").run();
+      // Retention sweep moved to the 30-minute cron (see index.ts scheduled):
+      // running a DELETE on every insert duplicated the cron's job and added
+      // one extra D1 write transaction per request.
       return;
     }
     await kv(env).put(DEBUG_PREFIX + recordId, JSON.stringify(record), {

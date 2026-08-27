@@ -139,6 +139,8 @@ async function authorize(ctx: HandlerCtx): Promise<Response | null> {
   if (exempt) return null;
 
   if (path.startsWith("/v1/")) {
+    // /v1/images/files/* is exempt like upstream adminMiddleware (C15).
+    if (path.startsWith("/v1/images/files/")) return null;
     if (!(await validAPIKey(ctx))) {
       return writeOpenAIError(401, "auth_error", "valid API key required");
     }
@@ -446,6 +448,15 @@ export default {
           await cleanupOld(env);
         } catch (e) {
           console.warn("[scheduled] chat-messages cleanup failed:", e instanceof Error ? e.message : e);
+        }
+        try {
+          // Debug-record retention sweep (moved out of the request path by
+          // the storage audit: the per-insert DELETE duplicated this cron).
+          if (env.DB) {
+            await env.DB.prepare("DELETE FROM debug_records WHERE at < datetime('now','-7 days')").run();
+          }
+        } catch (e) {
+          console.warn("[scheduled] debug-records cleanup failed:", e instanceof Error ? e.message : e);
         }
       })()
     );

@@ -14,10 +14,10 @@
 
 | 上游端点 | 状态 | 说明 |
 |---|---|---|
-| `POST /v1/chat/completions` | ✅ 完整 | 流式+非流式、reasoning_content、function calling（router 规划/fenced/native 检测/schema 校验信任边界/流式参数分片）、多模态图片上传、会话复用增量发送、failover、内容策略拦截、工具拒答/沙盒幻觉纠偏。**模型路由差异**：上游未映射时内置表回退+effort 自动升级（未知模型默认升 Gpt_5_5_Reasoning）；Worker 版严格按映射表执行，未映射直接 400 [应用户要求] |
+| `POST /v1/chat/completions` | ✅ 完整 | 流式+非流式、reasoning_content、function calling（router 规划/fenced/native 检测/schema 校验信任边界/流式参数分片）、多模态图片上传、会话复用增量发送、failover、内容策略拦截、工具拒答/沙盒幻觉纠偏。2026-08-27 补齐：上下文预算滑窗（slidingWindow + X-M365-Context-Truncated 头）、validateToolConversation（400 tool_protocol_error）、failover 守卫（仅限流/鉴权 + 流式已流守卫 + resolver 会话清除）、流式原生工具事件管道 + 无效工具 repair、图片多模态回传（image_url 块）、imageLimit/contentPolicy 账号标记。**模型路由差异**：上游未映射时内置表回退+effort 自动升级（未知模型默认升 Gpt_5_5_Reasoning）；Worker 版严格按映射表执行，未映射直接 400 [应用户要求] |
 | `GET /v1/models` | ✅ 完整 | Codex 风格目录全字段，`data`+`models` 双别名 |
-| `POST /v1/responses` | ⚠️ 功能等价 | instructions/input 全项转换、previous_response_id 历史（KV 1h TTL）、function_call 投影、SSE 事件序列。**差异**：流式为"完成后事件重放"而非逐字增量转换 [简化]；usage 为启发式估算非 tiktoken o200k [简化]；`function_call_progress` 项无条件跳过（上游解析成功才跳过）[简化] |
-| `POST /v1/messages` (Anthropic) | ✅ 增强 | system/块转换、thinking/tool_use block。**流式为真增量**（ChatHub onDelta/onReasoning 直接映射 thinking_delta/text_delta，含工具围栏扣留与 tool_use 块切换），优于上游的"完成后重放"实现 |
+| `POST /v1/responses` | ⚠️ 功能等价 | instructions/input 全项转换、previous_response_id 历史（KV 1h TTL）、function_call 投影、SSE 事件序列。**差异**：usage 为启发式估算非 tiktoken o200k [简化]。2026-08-27 补齐：`custom_tool_call` 转换 + custom exec 桥接（workspace 指令注入 + 非 exec 工具剔除）、`function_call_progress` 按上游 parseToolProgress 校验（缺 call_id/message 报错）、**流式改为增量转换**（C12：移植 streamResponsesAdapter，内层 OpenAI SSE 边读边转 response.created/output_text.delta/function_call_arguments.delta/custom_tool_call_input.delta 事件，替代"完成后重放"） |
+| `POST /v1/messages` (Anthropic) | ✅ 增强 | system/块转换、thinking/tool_use block。**流式为真增量**（ChatHub onDelta/onReasoning 直接映射 thinking_delta/text_delta，含工具围栏扣留与 tool_use 块切换），优于上游的"完成后重放"实现。2026-08-27（C9/C10）：tool_use block 转结构化 assistant tool_calls（不再渲染为文本）；stop_sequences 透传 o.stop |
 | `POST /v1/images/generations` | ✅ 完整 | 提示词模板、事件图片提取、rawResult/text 兜底提取、配额拒绝 429+Retry-After 86400、Designer 域名换 token 下载转存。**差异**：转存用 KV TTL 15min（上限 15MB，超出时仅 b64_json 可用），上游为内存 map 20MB [简化] |
 | `POST /v1/images/edits` | ✅ 完整 | multipart 表单（Workers 原生 formData 解析），operation=edit 复用生成管线 |
 | `GET /v1/images/files/<id>` | ✅ 完整 | KV 存储 + metadata contentType，UUID 校验 |
@@ -80,8 +80,8 @@
 | WS URL 构造（variants/source 引号等协议细节） | ✅ 逐字移植 | |
 | UploadFile 图片上传（form-urlencoded + feature gate 头 + jpeg→jpg 规范化） | ✅ 完整 | |
 | 多模态注解注入（ImageFile annotation + connectedFederatedConnections + imageBase64/imageUrl 双路径） | ✅ 完整 | |
-| 远程图片下载转 data URL | ⚠️ 不同路径 | 上传前先下载远程 https 图转为 data URL 再走 UploadFile；本移植直接把 https URL 放入 message.imageUrl 字段（上游保留的旧网关注入路径）。多数场景可用，未经上游同等测试 [简化] |
-| 附件下载 SSRF 防护（ssrf.go：仅 https 公网地址、DNS 解析复查私网/环回/云元数据段） | ❌ 未移植 | **[未做]** 当前接受任意 URL 作为 imageUrl 注入。Workers 出口为 CF 边缘，传统 SSRF 面较小，但仍建议补齐 scheme/host 校验 |
+| 远程图片下载转 data URL | ✅ 完整 | 2026-08-27（C2）：非 data: URL 先下载（手动重定向跟随 ≤5 跳、每跳重新校验、10MiB 上限）转 data URL 再走 UploadFile；上传前校验 base64 可解码 + ;base64 标记 |
+| 附件下载 SSRF 防护（ssrf.go：仅 https 公网地址、DNS 解析复查私网/环回/云元数据段） | ✅ 移植（平台近似） | 2026-08-27（C2）：scheme 必须 https；IP 字面量拒绝私网/环回/链路本地/CGNAT/云元数据/多播段；主机名拦截 169.254.169.254.nip.io/.internal/.local。Workers 无运行时 DNS API，域名复查依赖 CF 边缘出口（平台限制，面已显著缩小） |
 | OAuth PKCE（S256、nativeclient 手动粘贴流、AADSTS 错误归类） | ✅ 完整 | |
 | Device Code 流（auth/device.go StartDeviceCode/PollDeviceCode） | — | **[上游死代码]** 上游未挂接任何路由；仅 FOCI clientId 影响 refresh endpoint 选择，该逻辑已移植 |
 | ROPC 密码登录 | ✅ 完整 | |
@@ -94,7 +94,7 @@
 | 会话/上下文 TTL 环境变量（SESSION_TTL/CONTEXT_TTL_MINUTES） | ❌ 固定 2h | **[未做]** 环境旋钮未读取（M365_CONTEXT_SIMILARITY 上游代码中亦不存在） |
 | 用户级会话（body.user → userSessionStore 固定账号+对话） | ✅ 完整 | tenant=SHA-256(API key) 隔离、7 天 TTL 惰性清理、响应后回写；活跃集并入清理保护集 |
 | X-Request-ID 响应头关联 | ✅ 完整 | 所有 API 响应（含鉴权失败与 404）携带内部 requestId |
-| 对话缓存 convCache（account+model 维度 system-prompt-hash 增量复用） | ✅ 完整 | KV 键 `convcache:<apiKeyHash|anon>|<accId|auto>|<model>`（比上游多一层 API key 隔离），存 {accountId,conversationId,sessionId,messageCount,sysHash,lastUsedAt}，TTL 2h；prepareCore 无显式 conv 且 sysHash 一致且新条数>缓存时复用并增量 flatten(messages[count:])，命中即钉定缓存账号；recordFinalize 应答轮回写；无系统提示词的对话不参与（隔离保护） |
+| 对话缓存 convCache（account+model 维度 system-prompt-hash 增量复用） | ✅ 完整 | KV 键 `convcache:<accId|auto>|<model>`（2026-08-27 对齐上游 account+model 粒度，C7）；存 {accountId,conversationId,sessionId,messageCount,sysHash,lastUsedAt}，TTL 2h；prepareCore 无显式 conv 且 sysHash 一致且新条数>缓存时复用并增量 flatten(messages[count:])，命中即钉定缓存账号；recordFinalize 应答轮回写；无系统提示词的对话不参与（隔离保护） |
 | 自动清理（闲置 2h / keepN=5 / 活跃保护集 / 删除联动解绑 / 100 轮滑动窗口） | ✅ 完整 | Cron 每 30 分钟执行；新增单次 30 个删除预算（Free 子请求限制保护）[简化] |
 | 白名单（conversationManager.WhitelistedIDs 进保护集） | ✅ 完整 | KV 持久化 + 清理保护集 + 控制台白名单管理卡片 |
 | WS 连接池（connpool.go Take/Return 复用） | ❌ 裁剪 | **[平台]** isolate 无法跨请求持有连接；每请求新建（上游 Dialer 直连路径同样支持） |
@@ -108,8 +108,8 @@
 | 工具响应写出（流式 512B 参数分片 + finish_reason=tool_calls + usage chunk） | ✅ 完整 | |
 | Native 规划模式注入（planningMode=native 时把 tools 作为 ChatHub payload `plugins` 下发 + MCPServerURL 插件桥接） | ✅ 完整 | 请求带 tools 时自动合并进 MCP 全局注册表，chatPayload 下发 API plugins + mcp-gateway(MCPServerURL=/v1/mcp/sse) 条目，无工具时回落 BingWebSearch 内置；云端原生 tool 事件 → OpenAI tool_calls 的转换链路已接通（fenced→native→schema 校验/限额，流式与非流式一致） |
 | Agent ledger（证据链 RouterContext/CanContinue 轮次熔断/completionEvidenceAllows 收尾校验） | ✅ 完整 | `src/pipeline/ledger.ts` 纯函数移植：每请求从 messages 重建（assistant.tool_calls 建 id→{name,args}、role=tool 按 tool_call_id 回填 Result 并 compact 头 limit/3+尾 limit-head-80）；失败正则逐字对齐；签名计数 name\0args 规范化（trimmed+合法 JSON 键序重排重序列化）≥2 RepeatedCall/≥3 StuckLoop，失败签名（小写+数字→#+截500）≥2 RepeatedFailure/≥3 StuckLoop；CanContinue 依次报轮数达限/StuckLoop/RepeatedFailure/pending 未回填并熔断 router 规划轮；RouterContext（"A completed call is final evidence…"+EVIDENCE_LEDGER JSON+FINAL ANSWER RULE）注入 router 提示词；completionEvidenceAllows 收尾校验（pending→false/无证据却称完成→false/有证据却称无法确认→false），违例且请求带工具时正文替换为固定免责句 |
-| validateToolConversation（tool 消息格式前置校验） | ❌ 未移植 | **[未做]** 格式异常消息会进入 flatten 渲染而非 400 拒绝 |
-| 工具进度卡（tool_progress.go parseToolProgress + Progress 事件转发） | ⚠️ 部分 | Responses 转换无条件跳过该类项；聊天流内 Progress 事件不透传（上游在 chatStream 语义事件里透传——该部分已移植） |
+| validateToolConversation（tool 消息格式前置校验） | ✅ 完整 | 2026-08-27 移植：tool 消息缺 tool_call_id 或引用未知 id → 400 tool_protocol_error（`src/api/openai.ts` validateToolConversation） |
+| 工具进度卡（tool_progress.go parseToolProgress + Progress 事件转发） | ⚠️ 部分 | 2026-08-27：Responses 转换已按上游 parseToolProgress 校验（无效报错、有效跳过）；聊天流内 Progress 事件不透传（上游在 chatStream 语义事件里透传——该部分已移植） |
 | Codex 模型目录（capabilities 双位置/effort 预设/truncation policy 等 60+ 字段） | ✅ 完整 | |
 | 动态 tone 探测（CDN main.*.js 正则抓取） | ✅ 增强 | 匿名 + 鉴权两级探测；结果持久化并接入控制台模型映射下拉框（默认/拉取分组）。**差异**：上游为内存缓存+动态白名单校验；Worker 为 KV 持久化+纯格式校验。**路由差异**：上游内置表回退+effort 自动升级，Worker 严格映射表驱动（未映射 400、删除行即失效）[应用户要求] |
 | 用量估算 EstimateTokens（rune×2/3） | ✅ 完整 | |

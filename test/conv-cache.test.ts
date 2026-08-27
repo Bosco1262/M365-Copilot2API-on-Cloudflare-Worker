@@ -44,8 +44,8 @@ describe("convCache store", () => {
 
   it("round-trips entries under the bucket key", async () => {
     const env = makeEnv();
-    const key = convCacheKeyFor("k1", "accA", "gpt-5.2");
-    expect(key).toContain("convcache:k1|accA|gpt-5.2");
+    const key = convCacheKeyFor("accA", "gpt-5.2");
+    expect(key).toContain("convcache:accA|gpt-5.2");
     expect(await getConvCache(env, key)).toBeNull();
     await putConvCache(env, key, {
       accountId: "accA",
@@ -108,7 +108,7 @@ describe("prepareCore convCache integration", () => {
 
   it("misses when the sys prompt differs or no new messages arrived", async () => {
     const env = makeEnv();
-    const key = convCacheKeyFor("", "auto", "gpt-5.2");
+    const key = convCacheKeyFor("auto", "gpt-5.2");
     await putConvCache(env, key, {
       accountId: "a",
       conversationId: "c9",
@@ -136,7 +136,7 @@ describe("prepareCore convCache integration", () => {
 
   it("never engages without a system prompt (isolation guard)", async () => {
     const env = makeEnv();
-    await putConvCache(env, convCacheKeyFor("", "auto", "m"), {
+    await putConvCache(env, convCacheKeyFor("auto", "m"), {
       accountId: "a",
       conversationId: "c",
       sessionId: "s",
@@ -169,7 +169,7 @@ describe("prepareCore convCache integration", () => {
   it("tool-bearing requests skip reuse and send the full transcript", async () => {
     const env = makeEnv();
     // Seed a cache entry that WOULD match a plain follow-up turn.
-    await putConvCache(env, convCacheKeyFor("", "auto", "gpt-5.2"), {
+    await putConvCache(env, convCacheKeyFor("auto", "gpt-5.2"), {
       accountId: "a",
       conversationId: "c-tool",
       sessionId: "s-tool",

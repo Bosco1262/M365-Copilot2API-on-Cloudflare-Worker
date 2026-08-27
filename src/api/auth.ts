@@ -15,7 +15,7 @@ export function rawAPIKey(ctx: HandlerCtx): string {
 export async function validAPIKey(ctx: HandlerCtx): Promise<boolean> {
   const raw = rawAPIKey(ctx);
   if (raw === "") return false;
-  return validKey(ctx.env, raw);
+  return validKey(ctx.env, raw, ctx.waitUntil);
 }
 
 export function extractAPIKeyPrefix(ctx: HandlerCtx): string {

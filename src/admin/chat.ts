@@ -7,7 +7,7 @@ import { describeUpstream } from "../errors";
 import { getSettings } from "../store/settings";
 import { resolveAccount, markFailure, markSuccess } from "../pipeline/account";
 import { chat as chathubChat } from "../chathub/client";
-import { normalizeFrame, semanticEvents } from "../chathub/protocol";
+import { normalizeFrame, semanticEvents, stripCitationMarkers } from "../chathub/protocol";
 import { getSessionBinding, upsertSessionBinding } from "../store/conversations";
 import type { AccountToken } from "../types";
 
@@ -165,13 +165,17 @@ export async function handleChatStream(ctx: HandlerCtx): Promise<Response> {
       for (const [i, ev] of semanticEvents(res.events as Record<string, unknown>[]).entries()) {
         await emit("semantic", { index: i, type: "m365.semantic", event: ev });
       }
+      // C18: strip \uE200cite\uE202…\uE201 citation markers and surface the
+      // referenced URLs (stream.go chatStream parity).
+      const { text: cleanText, urls } = stripCitationMarkers(res.text, res.references);
       await emit("done", {
         type: "done",
-        text: res.text,
+        text: cleanText,
         conversationId: res.conversationId,
         sessionId: res.sessionId,
         requestId: res.requestId,
         throttling: res.throttling,
+        references: urls,
       });
       await writer.close();
     })();

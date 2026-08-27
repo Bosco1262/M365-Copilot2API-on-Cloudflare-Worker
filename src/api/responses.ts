@@ -2,13 +2,13 @@
 // (ports of responsesRequest.openAI() from protocol_compat.go, the
 // previous_response_id history from protocol_handlers.go responses(),
 // estimateResponsesUsage from codex_usage.go and writeResponsesResult from
-// codex_responses.go; streaming replays the completed output as the standard
-// event sequence — correct but not incremental, unlike the upstream pipe).
+// codex_responses.go; streaming converts the inner OpenAI SSE incrementally
+// like the upstream streamResponsesAdapter — C12).
 
 import type { HandlerCtx } from "../router";
 import { jsonOut, uuid } from "../util";
 import type { OaiMsg } from "../pipeline/prompt";
-import { runCompletionsCore, m365Metadata, type OaiReqBody } from "./openai";
+import { runCompletionsCore, streamChatCompletions, m365Metadata, type OaiReqBody } from "./openai";
 
 interface ResponsesRequest {
   model?: string;
@@ -109,13 +109,24 @@ export function responsesToOpenAI(body: ResponsesRequest): { o: OaiReqBody; erro
       const m = raw as Record<string, unknown>;
       const typ = typeof m["type"] === "string" ? m["type"] : "";
       switch (typ) {
-        case "function_call_progress":
-          // Transport metadata; must not trigger a model turn.
+        case "function_call_progress": {
+          // Transport metadata from a long-running client-side executor; must
+          // not trigger a model turn. Validated like upstream parseToolProgress
+          // (call_id + message required) — A8.
+          const cid = typeof m["call_id"] === "string" ? m["call_id"] : "";
+          const msg = typeof m["message"] === "string" ? m["message"] : "";
+          if (cid.trim() === "" || msg.trim() === "") {
+            return { o, error: "invalid function_call_progress" };
+          }
           continue;
+        }
         case "function_call_output":
         case "custom_tool_call_output": {
           const id = typeof m["call_id"] === "string" ? m["call_id"] : "";
-          messages.push({ role: "tool", tool_call_id: id, content: m["output"] });
+          if (id.trim() === "") {
+            return { o, error: `${typ} missing call_id` };
+          }
+          messages.push({ role: "tool", tool_call_id: id.trim(), content: m["output"] });
           break;
         }
         case "function_call": {
@@ -137,8 +148,20 @@ export function responsesToOpenAI(body: ResponsesRequest): { o: OaiReqBody; erro
           });
           break;
         }
-        case "custom_tool_call":
-          continue; // custom exec bridging arrives with MCP phase
+        case "custom_tool_call": {
+          // Codex exec bridge (protocol_compat.go 95-99 port, A8): the custom
+          // tool keeps its type so the exec input string survives conversion.
+          const id = typeof m["call_id"] === "string" ? m["call_id"] : "";
+          const name = typeof m["name"] === "string" ? m["name"] : "";
+          const input = typeof m["input"] === "string" ? m["input"] : "";
+          messages.push({
+            role: "assistant",
+            tool_calls: [
+              { id, type: "custom", function: { name, arguments: JSON.stringify({ input }) } },
+            ],
+          });
+          break;
+        }
         default: {
           let role = typeof m["role"] === "string" ? m["role"] : "";
           if (role === "") role = "user";
@@ -152,30 +175,50 @@ export function responsesToOpenAI(body: ResponsesRequest): { o: OaiReqBody; erro
   } else if (body.input != null) {
     return { o, error: "input must be string or array" };
   }
-  o.messages = messages;
-  // Function tools map through; custom tools are bridged as JSON-schema'd
-  // single-string functions like upstream's exec handling.
+  // Custom exec bridge (protocol_compat.go 118-148 port, A8): when a custom
+  // exec tool is declared, all non-exec tools are dropped and the workspace
+  // instruction is injected ahead of the transcript.
+  const customExecWorkspaceInstruction = `You are operating through the caller's local OpenCode execution bridge. Never use, request, or mention Microsoft 365/Copilot native tools. The only permitted execution tool is the caller-provided custom exec tool. The executor already starts in the caller-selected project workspace. Use relative paths only; never guess, cd to, or write under /root, /workspace, /tmp, or any other absolute project path. Inspect pwd and ls before changes. Do not create files outside the current working directory. Never claim a file was created, modified, or verified until custom exec returns a successful result. After every execution, use custom exec to verify the result.`;
   const tools: { type?: string; function?: Record<string, unknown> }[] = [];
+  let hasCustomExec = false;
   for (const t of body.tools ?? []) {
     const typ = t["type"];
     const name = t["name"];
+    if (typ === "custom" && name === "exec") {
+      hasCustomExec = true;
+      break;
+    }
+  }
+  for (const t of body.tools ?? []) {
+    const typ = t["type"];
+    const name = t["name"];
+    if (hasCustomExec && !(typ === "custom" && name === "exec")) continue;
     if (typ === "custom") {
-      tools.push({
-        type: "custom",
-        function: {
-          name,
-          description: t["description"],
-          parameters:
-            name === "exec"
-              ? {
-                  type: "object",
-                  properties: { input: { type: "string" } },
-                  required: ["input"],
-                  additionalProperties: false,
-                }
-              : undefined,
-        },
-      });
+      const fn: Record<string, unknown> = {
+        name,
+        description: t["description"],
+        parameters:
+          name === "exec"
+            ? {
+                type: "object",
+                properties: { input: { type: "string" } },
+                required: ["input"],
+                additionalProperties: false,
+              }
+            : undefined,
+      };
+      if (name === "exec") {
+        // ChatHub accepts JSON function arguments; the exec bridge carries the
+        // grammar-constrained raw input through a single string field.
+        fn["parameters"] = {
+          type: "object",
+          properties: { input: { type: "string" } },
+          required: ["input"],
+          additionalProperties: false,
+        };
+        hasCustomExec = true;
+      }
+      tools.push({ type: "custom", function: fn });
     } else if (typ === "function") {
       tools.push({
         type: "function",
@@ -183,6 +226,10 @@ export function responsesToOpenAI(body: ResponsesRequest): { o: OaiReqBody; erro
       });
     }
   }
+  if (hasCustomExec) {
+    messages.unshift({ role: "system", content: customExecWorkspaceInstruction });
+  }
+  o.messages = messages;
   if (tools.length > 0) o.tools = tools;
   return { o };
 }
@@ -341,6 +388,286 @@ export function buildResponsesResponse(model: string, stream: boolean, src: Reco
   });
 }
 
+// Port of streamResponsesAdapter (protocol_handlers.go 110-296, C12): the
+// inner OpenAI SSE stream is converted incrementally — text deltas and tool-call
+// argument chunks are forwarded as they arrive instead of replaying the
+// completed output.
+interface TcState {
+  itemId: string;
+  id: string;
+  name: string;
+  args: string;
+  type: "function" | "custom";
+}
+
+function customToolInput(argumentsStr: string): string {
+  try {
+    const v = JSON.parse(argumentsStr) as { input?: unknown };
+    return typeof v.input === "string" ? v.input : "";
+  } catch {
+    return "";
+  }
+}
+
+async function streamResponsesAdapter(
+  ctx: HandlerCtx,
+  o: OaiReqBody,
+  body: ResponsesRequest,
+  model: string,
+  tenant: string,
+  startedAt: number
+): Promise<Response> {
+  const inner = await streamChatCompletions(ctx, { ...o, stream: true });
+  const reader = (inner.body as ReadableStream<Uint8Array>).getReader();
+  const { readable, writable } = new TransformStream<Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  const emit = (name: string, value: unknown) =>
+    writer.write(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`));
+
+  const id = "resp_" + uuid();
+  const created = Math.floor(Date.now() / 1000);
+  emit("response.created", {
+    type: "response.created",
+    response: { id, object: "response", status: "in_progress", model, output: [] },
+  });
+
+  let text = "";
+  let textStarted = false;
+  const messageID = "msg_" + uuid();
+  const contentID = "txt_" + uuid();
+  const calls = new Map<number, TcState>();
+  let failed = false;
+  let errorMessage = "inner chat request failed";
+
+  const work = (async () => {
+    const dec = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trimEnd();
+          buf = buf.slice(nl + 1);
+          if (line === "" || !line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") continue;
+          let chunk: Record<string, unknown>;
+          try {
+            chunk = JSON.parse(payload) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (chunk["error"] != null) {
+            failed = true;
+            const err = chunk["error"] as Record<string, unknown>;
+            if (typeof err["message"] === "string") errorMessage = err["message"] as string;
+            continue;
+          }
+          const choices = chunk["choices"];
+          if (!Array.isArray(choices) || choices.length === 0) continue;
+          const delta = ((choices[0] as Record<string, unknown>)["delta"] ?? {}) as Record<string, unknown>;
+          if (typeof delta["content"] === "string" && (delta["content"] as string) !== "") {
+            text += delta["content"];
+            if (!textStarted) {
+              textStarted = true;
+              emit("response.output_item.added", {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: {
+                  type: "message",
+                  id: messageID,
+                  role: "assistant",
+                  status: "in_progress",
+                  content: [{ type: "output_text", id: contentID, text: "", annotations: [] }],
+                },
+              });
+            }
+            emit("response.output_text.delta", {
+              type: "response.output_text.delta",
+              output_index: 0,
+              content_index: 0,
+              item_id: messageID,
+              delta: delta["content"],
+            });
+          }
+          if (Array.isArray(delta["tool_calls"])) {
+            for (const raw of delta["tool_calls"] as unknown[]) {
+              if (!raw || typeof raw !== "object") continue;
+              const tc = raw as Record<string, unknown>;
+              const idx = Number(tc["index"] ?? 0);
+              const typ = tc["type"] === "custom" ? "custom" : "function";
+              let st = calls.get(idx);
+              if (!st) {
+                const prefix = typ === "custom" ? "ctc_" : "fc_";
+                const item: Record<string, unknown> = {
+                  type: typ === "custom" ? "custom_tool_call" : "function_call",
+                  call_id: "",
+                  name: "",
+                  status: "in_progress",
+                };
+                if (typ === "custom") item["input"] = "";
+                else item["arguments"] = "";
+                st = { itemId: prefix + uuid(), id: "", name: "", args: "", type: typ };
+                calls.set(idx, st);
+                item["id"] = st.itemId;
+                emit("response.output_item.added", { type: "response.output_item.added", output_index: idx, item });
+              }
+              if (typeof tc["id"] === "string" && tc["id"] !== "") st.id = tc["id"] as string;
+              const fn = (tc["function"] ?? {}) as Record<string, unknown>;
+              if (typeof fn["name"] === "string") st.name += fn["name"] as string;
+              if (typeof fn["arguments"] === "string" && (fn["arguments"] as string) !== "") {
+                st.args += fn["arguments"] as string;
+                if (st.type !== "custom") {
+                  emit("response.function_call_arguments.delta", {
+                    type: "response.function_call_arguments.delta",
+                    output_index: idx,
+                    item_id: st.itemId,
+                    delta: fn["arguments"],
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      failed = true;
+      errorMessage = "inner chat stream failed";
+    }
+    // Terminal events (protocol_handlers.go 223-296 parity).
+    if (failed) {
+      emit("response.failed", {
+        type: "response.failed",
+        response: {
+          id,
+          object: "response",
+          status: "failed",
+          model,
+          error: { code: 502, message: errorMessage },
+        },
+      });
+    } else if (calls.size === 0 && text.trim() === "") {
+      emit("response.failed", {
+        type: "response.failed",
+        response: {
+          id,
+          object: "response",
+          status: "failed",
+          model,
+          error: { code: "empty_upstream_response", message: "ChatHub returned no text or tool call" },
+        },
+      });
+    } else {
+      const output: Record<string, unknown>[] = [];
+      if (calls.size > 0) {
+        const keys = [...calls.keys()].sort((a, b) => a - b);
+        for (const i of keys) {
+          const st = calls.get(i)!;
+          if (st.type === "custom") {
+            const input = customToolInput(st.args);
+            const item: Record<string, unknown> = { type: "custom_tool_call", id: st.itemId, call_id: st.id, name: st.name, input, status: "completed" };
+            output.push(item);
+            emit("response.custom_tool_call_input.delta", { type: "response.custom_tool_call_input.delta", output_index: i, item_id: item["id"], delta: input });
+            emit("response.custom_tool_call_input.done", { type: "response.custom_tool_call_input.done", output_index: i, item_id: item["id"], input });
+            emit("response.output_item.done", { type: "response.output_item.done", output_index: i, item });
+            continue;
+          }
+          const item: Record<string, unknown> = { type: "function_call", id: st.itemId, call_id: st.id, name: st.name, arguments: st.args, status: "completed" };
+          output.push(item);
+          emit("response.function_call_arguments.done", { type: "response.function_call_arguments.done", output_index: i, item_id: st.itemId, arguments: st.args });
+          emit("response.output_item.done", { type: "response.output_item.done", output_index: i, item });
+        }
+      } else {
+        const item: Record<string, unknown> = {
+          type: "message",
+          id: messageID,
+          role: "assistant",
+          status: "in_progress",
+          content: [{ type: "output_text", id: contentID, text: "", annotations: [] }],
+        };
+        output.push(item);
+        if (!textStarted) {
+          emit("response.output_item.added", { type: "response.output_item.added", output_index: 0, item });
+          emit("response.output_text.delta", { type: "response.output_text.delta", output_index: 0, content_index: 0, item_id: messageID, delta: text });
+        }
+        emit("response.output_text.done", { type: "response.output_text.done", output_index: 0, content_index: 0, item_id: messageID, text });
+        item["status"] = "completed";
+        item["content"] = [{ type: "output_text", id: contentID, text, annotations: [] }];
+        emit("response.output_item.done", { type: "response.output_item.done", output_index: 0, item });
+      }
+      let usageOutput = text;
+      for (const st of calls.values()) usageOutput += st.name + st.args;
+      const estimate = estimateResponsesUsage(model, o.messages ?? [], usageOutput);
+      const resp: Record<string, unknown> = {
+        id,
+        object: "response",
+        created_at: created,
+        status: "completed",
+        model,
+        output,
+        usage: estimate.values,
+        m365: localUsageMetadata(estimate.source),
+      };
+      emit("response.completed", { type: "response.completed", response: resp });
+
+      // History + usage bookkeeping (mirrors the non-stream path).
+      const publicID = id;
+      const storedMessages: OaiMsg[] = [...(o.messages ?? [])];
+      if (calls.size > 0) {
+        storedMessages.push({
+          role: "assistant",
+          tool_calls: [...calls.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([, st]) => ({
+              id: st.id || st.itemId,
+              type: st.type === "custom" ? "custom" : "function",
+              function: {
+                name: st.name,
+                arguments: st.type === "custom" ? JSON.stringify({ input: customToolInput(st.args) }) : st.args,
+              },
+            })),
+        });
+      } else if (text !== "") {
+        storedMessages.push({ role: "assistant", content: text });
+      }
+      ctx.waitUntil(saveHistory(ctx, tenant, publicID, storedMessages));
+      ctx.waitUntil(
+        Promise.resolve().then(async () => {
+          const { recordUsage } = await import("../store/usage");
+          const { extractAPIKeyPrefix } = await import("./auth");
+          await recordUsage(ctx.env, {
+            time: new Date().toISOString(),
+            api_key_prefix: extractAPIKeyPrefix(ctx),
+            account_email: "",
+            model,
+            endpoint: "/v1/responses",
+            stream: true,
+            input_tokens: estimate.values.input_tokens as number,
+            output_tokens: estimate.values.output_tokens as number,
+            cache_tokens: 0,
+            duration_ms: Date.now() - startedAt,
+            status: 200,
+          });
+        })
+      );
+    }
+    await writer.close();
+  })();
+  ctx.waitUntil(work);
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
   if (ctx.req.method !== "POST") {
     return jsonOut(
@@ -374,6 +701,12 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
   }
 
   const startedAt = Date.now();
+  const model = body.model || "m365-copilot";
+  // C12: streaming converts the inner OpenAI SSE incrementally (upstream
+  // streamResponsesAdapter parity) instead of buffering then replaying.
+  if (body.stream) {
+    return streamResponsesAdapter(ctx, o, body, model, tenant, startedAt);
+  }
   const core = await runCompletionsCore(ctx, o);
   if (!core.ok) {
     const errResp = core.error;
@@ -389,7 +722,6 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
     return jsonOut({ error: { message, type } }, status);
   }
   const s = core.success;
-  const model = body.model || "m365-copilot";
 
   // Build an internal OpenAI-shaped result then project it.
   const assistant: Record<string, unknown> = { role: "assistant", content: s.text };

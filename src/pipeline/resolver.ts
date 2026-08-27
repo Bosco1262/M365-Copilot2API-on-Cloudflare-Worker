@@ -6,7 +6,15 @@
 //      longest prefix wins -> HistoryLen enables incremental sending
 //   3. common-suffix fallback (min 2 messages) -> reuse
 //   4. new session
-// State persists in KV under "resolver-sessions".
+//
+// Storage audit P0-1: sessions used to live in ONE KV document
+// ("resolver-sessions") holding up to 1000 sessions x 512 messages each —
+// every request read and rewrote the whole multi-megabyte blob, and the
+// read-modify-write pattern silently lost concurrent sessions. Now each
+// session is an independent KV key `resolver/<sessionId>` (TTL 2h) and a
+// small `resolver-index` document only carries the lightweight summaries
+// needed for candidate filtering and listing. The legacy document is
+// migrated lazily on first load and then deleted.
 
 import type { Env } from "../env";
 import { getJSON, putJSON } from "../kv";
@@ -14,10 +22,24 @@ import { sha256Hex } from "../util";
 import type { OaiMsg } from "./prompt";
 import { contentToString } from "./prompt";
 
-const KEY = "resolver-sessions";
+const PREFIX = "resolver/";
+const INDEX_KEY = "resolver-index";
+const LEGACY_KEY = "resolver-sessions";
+const SESSION_TTL_SECONDS = 2 * 3600;
+
 export const DEFAULT_MAX_SESSIONS = 1000;
 export const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
 export const DEFAULT_CONTEXT_TTL_MS = 2 * 60 * 60 * 1000;
+
+// Index entries are refreshed on touch at most this often, so a request that
+// only continues an existing session performs no index write at all.
+const INDEX_TOUCH_THROTTLE_MS = 5 * 60_000;
+// Slack added when filtering candidates by the (throttled) index timestamps.
+const INDEX_STALE_SLACK_MS = 6 * 60_000;
+// Upper bound of full session reads per resolve (subrequest budget guard).
+const MAX_CANDIDATES = 24;
+// Upper bound of full session reads for console/listing paths.
+const LIST_MAX_FULL_READS = 50;
 
 export interface ResolverSession {
   sessionId: string;
@@ -31,6 +53,14 @@ export interface ResolverSession {
   contextHistory?: OaiMsg[];
 }
 
+interface IndexEntry {
+  sessionId: string;
+  conversationId: string;
+  accountId: string;
+  lastUsedAt: string;
+  ipFingerprint?: string;
+}
+
 export interface ResolveResult {
   sessionId: string;
   conversationId: string;
@@ -40,24 +70,82 @@ export interface ResolveResult {
   historyLen: number;
 }
 
-async function loadDoc(env: Env): Promise<ResolverSession[]> {
-  return (await getJSON<ResolverSession[]>(env["m365-copilot2api_KV"], KEY)) ?? [];
+function sessionKey(sessionId: string): string {
+  return PREFIX + sessionId;
 }
 
-async function saveDoc(env: Env, sessions: ResolverSession[]): Promise<void> {
-  await putJSON(env["m365-copilot2api_KV"], KEY, sessions);
+// ------------------------------------------------------------- storage ---
+
+function toIndexEntry(s: ResolverSession): IndexEntry {
+  return {
+    sessionId: s.sessionId,
+    conversationId: s.conversationId,
+    accountId: s.accountId,
+    lastUsedAt: s.lastUsedAt,
+    ipFingerprint: s.ipFingerprint,
+  };
 }
 
-function evict(sessions: ResolverSession[], ttlMs: number, maxSessions: number): ResolverSession[] {
-  const now = Date.now();
-  let out = sessions.filter((s) => now - Date.parse(s.lastUsedAt) <= ttlMs);
+async function getSession(env: Env, sessionId: string): Promise<ResolverSession | null> {
+  return (await getJSON<ResolverSession>(env["m365-copilot2api_KV"], sessionKey(sessionId))) ?? null;
+}
+
+async function putSession(env: Env, s: ResolverSession): Promise<void> {
+  await putJSON(env["m365-copilot2api_KV"], sessionKey(s.sessionId), s, {
+    expirationTtl: SESSION_TTL_SECONDS,
+  });
+}
+
+async function deleteSession(env: Env, sessionId: string): Promise<void> {
+  await env["m365-copilot2api_KV"].delete(sessionKey(sessionId));
+}
+
+/**
+ * Loads the index, migrating the legacy single-document store on first use:
+ * every legacy session is written to its own key, the index is built from it,
+ * and the legacy document is deleted (its data re-expires with the 2h TTL).
+ */
+async function loadIndex(env: Env): Promise<IndexEntry[]> {
+  const stored = await getJSON<IndexEntry[]>(env["m365-copilot2api_KV"], INDEX_KEY);
+  if (stored) return stored;
+  const legacy = await getJSON<ResolverSession[]>(env["m365-copilot2api_KV"], LEGACY_KEY);
+  if (!legacy || legacy.length === 0) return [];
+  for (const s of legacy) {
+    try {
+      await putSession(env, s);
+    } catch {}
+  }
+  const index = legacy.map(toIndexEntry);
+  await putJSON(env["m365-copilot2api_KV"], INDEX_KEY, index);
+  await env["m365-copilot2api_KV"].delete(LEGACY_KEY);
+  console.log(`[resolver] migrated ${legacy.length} legacy sessions to individual keys`);
+  return index;
+}
+
+function evictIndex(index: IndexEntry[], ttlMs: number, maxSessions: number): IndexEntry[] {
+  const cutoff = Date.now() - ttlMs - INDEX_STALE_SLACK_MS;
+  const out = index.filter((e) => Date.parse(e.lastUsedAt) > cutoff);
   if (out.length > maxSessions) {
-    out = [...out]
-      .sort((a, b) => Date.parse(a.lastUsedAt) - Date.parse(b.lastUsedAt))
-      .slice(out.length - maxSessions);
+    out.sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
+    out.length = maxSessions;
   }
   return out;
 }
+
+async function saveIndex(env: Env, index: IndexEntry[]): Promise<void> {
+  await putJSON(env["m365-copilot2api_KV"], INDEX_KEY, index);
+}
+
+/** Throttled index refresh for the touch path (no index write per request). */
+async function touchIndexEntry(env: Env, index: IndexEntry[], sessionId: string): Promise<void> {
+  const entry = index.find((e) => e.sessionId === sessionId);
+  const now = Date.now();
+  if (!entry || now - Date.parse(entry.lastUsedAt) < INDEX_TOUCH_THROTTLE_MS) return;
+  entry.lastUsedAt = new Date(now).toISOString();
+  await saveIndex(env, index);
+}
+
+// ------------------------------------------------------- pure functions ---
 
 // Port of clientIPFingerprint; Workers expose the client IP via CF-Connecting-IP.
 export async function clientIPFingerprint(ip: string, userAgent: string): Promise<string> {
@@ -138,11 +226,11 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
   const ttlMs = params.ttlMs ?? DEFAULT_TTL_MS;
   const contextTtlMs = params.contextTtlMs ?? DEFAULT_CONTEXT_TTL_MS;
   const maxSessions = params.maxSessions ?? DEFAULT_MAX_SESSIONS;
-  let sessions = evict(await loadDoc(env), ttlMs, maxSessions);
 
-  const touch = async (sess: ResolverSession): Promise<ResolveResult> => {
+  const touch = async (sess: ResolverSession, index: IndexEntry[]): Promise<ResolveResult> => {
     sess.lastUsedAt = new Date().toISOString();
-    await saveDoc(env, sessions);
+    await putSession(env, sess);
+    await touchIndexEntry(env, index, sess.sessionId);
     return {
       sessionId: sess.sessionId,
       conversationId: sess.conversationId,
@@ -156,11 +244,10 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
   // 1. explicit id — highest priority continuation semantics.
   const explicitID = (params.explicitId ?? "").trim();
   if (explicitID !== "") {
-    const hit =
-      sessions.find((s) => s.sessionId === explicitID) ??
-      sessions.find((s) => s.sessionId === explicitID);
+    const hit = await getSession(env, explicitID);
     if (hit) {
-      const r = await touch(hit);
+      const index = evictIndex(await loadIndex(env), ttlMs, maxSessions);
+      const r = await touch(hit, index);
       r.matchedBy = "explicit";
       return r;
     }
@@ -168,9 +255,30 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
 
   const messages = params.messages ?? [];
   const finger = params.ipFingerprint ?? "";
+  const index = evictIndex(await loadIndex(env), ttlMs, maxSessions);
 
-  // 2. strict context-prefix match, longest wins.
-  if (messages.length > 0) {
+  // Candidates: same IP fingerprint, inside the context TTL, newest first,
+  // bounded so one resolve never burns the subrequest budget.
+  const contextCutoff = Date.now() - contextTtlMs - INDEX_STALE_SLACK_MS;
+  const candidates = index
+    .filter(
+      (e) =>
+        Date.parse(e.lastUsedAt) > contextCutoff &&
+        !!finger &&
+        !!e.ipFingerprint &&
+        e.ipFingerprint === finger
+    )
+    .sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt))
+    .slice(0, MAX_CANDIDATES);
+
+  if (messages.length > 0 && candidates.length > 0) {
+    const sessions: ResolverSession[] = [];
+    for (const c of candidates) {
+      const s = await getSession(env, c.sessionId);
+      if (s) sessions.push(s);
+    }
+
+    // 2. strict context-prefix match, longest wins.
     let best: { s: ResolverSession; n: number } | null = null;
     for (const sess of sessions) {
       if (Date.now() - Date.parse(sess.lastUsedAt) > contextTtlMs) continue;
@@ -184,7 +292,7 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
       }
     }
     if (best) {
-      const r = await touch(best.s);
+      const r = await touch(best.s, index);
       r.matchedBy = `context_prefix_${best.n}`;
       r.historyLen = best.n;
       return r;
@@ -209,7 +317,7 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
         }
       }
       if (bestSuffix) {
-        const r = await touch(bestSuffix.s);
+        const r = await touch(bestSuffix.s, index);
         r.matchedBy = `context_suffix_${bestSuffix.n}`;
         r.historyLen = bestSuffix.n;
         return r;
@@ -236,7 +344,7 @@ interface BindParams {
 export async function bindSession(env: Env, params: BindParams): Promise<void> {
   const ttlMs = params.ttlMs ?? DEFAULT_TTL_MS;
   const maxSessions = params.maxSessions ?? DEFAULT_MAX_SESSIONS;
-  const sessions = evict(await loadDoc(env), ttlMs, maxSessions);
+  const index = evictIndex(await loadIndex(env), ttlMs, maxSessions);
   const now = new Date().toISOString();
 
   let sessionId = params.sessionId;
@@ -256,49 +364,91 @@ export async function bindSession(env: Env, params: BindParams): Promise<void> {
     sess.contextHistory = history;
   };
 
+  let target: ResolverSession | null = null;
   if (sessionId !== "") {
-    const existing = sessions.find((s) => s.sessionId === sessionId);
-    if (existing) {
-      applyTo(existing);
-      await saveDoc(env, sessions);
-      return;
-    }
+    target = await getSession(env, sessionId);
   } else {
-    const byConv = sessions.find((s) => s.conversationId === params.conversationId);
-    if (byConv) {
-      applyTo(byConv);
-      await saveDoc(env, sessions);
-      return;
-    }
-    sessionId = crypto.randomUUID();
+    const byConv = index.find((e) => e.conversationId === params.conversationId);
+    if (byConv) target = await getSession(env, byConv.sessionId);
+    if (!target) sessionId = crypto.randomUUID();
   }
 
-  const sess: ResolverSession = {
-    sessionId,
-    conversationId: params.conversationId,
-    accountId: params.accountId,
-    createdAt: now,
-    lastUsedAt: now,
-    ipFingerprint: params.ipFingerprint,
-    userField: params.userField,
-    contextFinger: finger,
-    contextHistory: history,
-  };
-  sessions.push(sess);
-  await saveDoc(env, sessions);
+  if (target) {
+    sessionId = target.sessionId;
+    applyTo(target);
+    await putSession(env, target);
+  } else {
+    target = {
+      sessionId,
+      conversationId: params.conversationId,
+      accountId: params.accountId,
+      createdAt: now,
+      lastUsedAt: now,
+      ipFingerprint: params.ipFingerprint,
+      userField: params.userField,
+      contextFinger: finger,
+      contextHistory: history,
+    };
+    await putSession(env, target);
+  }
+
+  // Index upsert (binds always refresh: the entry feeds candidate filtering,
+  // dedupe-by-conversation and unbind-by-conversation).
+  const entry = toIndexEntry(target);
+  const existing = index.findIndex((e) => e.sessionId === sessionId);
+  if (existing >= 0) index[existing] = entry;
+  else index.push(entry);
+  if (index.length > maxSessions) {
+    index.sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
+    index.length = maxSessions;
+  }
+  await saveIndex(env, index);
 }
 
 // Port of UnbindByConversation: drop every session bound to a deleted cloud
 // conversation so the resolver never reuses dead conversations.
 export async function unbindByConversation(env: Env, conversationId: string): Promise<number> {
-  const sessions = await loadDoc(env);
-  const kept = sessions.filter((s) => s.conversationId !== conversationId);
-  const removed = sessions.length - kept.length;
-  if (removed > 0) await saveDoc(env, kept);
+  const index = await loadIndex(env);
+  const kept: IndexEntry[] = [];
+  let removed = 0;
+  for (const e of index) {
+    if (e.conversationId === conversationId) {
+      await deleteSession(env, e.sessionId);
+      removed++;
+    } else {
+      kept.push(e);
+    }
+  }
+  if (removed > 0) await saveIndex(env, kept);
   return removed;
 }
 
 export async function listResolverSessions(env: Env): Promise<ResolverSession[]> {
-  const sessions = await loadDoc(env);
-  return [...sessions].sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
+  const index = evictIndex(
+    await loadIndex(env),
+    DEFAULT_TTL_MS,
+    DEFAULT_MAX_SESSIONS
+  );
+  const sorted = [...index].sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
+  const out: ResolverSession[] = [];
+  // Full transcripts only for the most recent sessions (console views); the
+  // rest are returned as lightweight summaries straight from the index.
+  for (let i = 0; i < sorted.length; i++) {
+    if (i < LIST_MAX_FULL_READS) {
+      const s = await getSession(env, sorted[i].sessionId);
+      if (s) {
+        out.push(s);
+        continue;
+      }
+    }
+    out.push({
+      sessionId: sorted[i].sessionId,
+      conversationId: sorted[i].conversationId,
+      accountId: sorted[i].accountId,
+      createdAt: sorted[i].lastUsedAt,
+      lastUsedAt: sorted[i].lastUsedAt,
+      ipFingerprint: sorted[i].ipFingerprint,
+    });
+  }
+  return out;
 }

@@ -55,6 +55,39 @@ describe("anthropicToOpenAI", () => {
       content: "42",
     });
   });
+
+  it("keeps tool_use as structured assistant tool_calls (C9)", () => {
+    const { o } = anthropicToOpenAI({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "calling..." },
+            { type: "tool_use", id: "tu_1", name: "bash", input: { command: "ls" } },
+          ],
+        },
+      ],
+    });
+    const m = o.messages![0];
+    expect(m.role).toBe("assistant");
+    expect(m.tool_calls).toHaveLength(1);
+    const tc = m.tool_calls![0] as Record<string, unknown>;
+    expect(tc["id"]).toBe("tu_1");
+    expect(tc["type"]).toBe("function");
+    const fn = tc["function"] as Record<string, unknown>;
+    expect(fn["name"]).toBe("bash");
+    expect(JSON.parse(fn["arguments"] as string)).toEqual({ command: "ls" });
+  });
+
+  it("passes stop_sequences through (C10)", () => {
+    const { o } = anthropicToOpenAI({
+      model: "m",
+      stop_sequences: ["</tool>", "END"],
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(o.stop).toEqual(["</tool>", "END"]);
+  });
 });
 
 describe("buildAnthropicBlocks", () => {

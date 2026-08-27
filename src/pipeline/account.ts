@@ -19,6 +19,7 @@ interface HealthDoc {
 }
 
 const KEY = "account-health";
+const LAST_HEALTHY_KEY = "account-last-healthy";
 
 async function load(env: Env): Promise<HealthDoc> {
   return (
@@ -29,6 +30,27 @@ async function load(env: Env): Promise<HealthDoc> {
       calls: {},
     }
   );
+}
+
+// Port of Server.lastHealthyAccount: the most recently successful account is
+// preferred for the next unpinned request so round-robin does not fragment
+// cloud sessions (C4).
+async function rememberHealthy(env: Env, accountID: string): Promise<void> {
+  try {
+    await env["m365-copilot2api_KV"].put(LAST_HEALTHY_KEY, accountID, {
+      expirationTtl: 12 * 3600,
+    });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function lastHealthyAccountID(env: Env): Promise<string> {
+  try {
+    return (await env["m365-copilot2api_KV"].get(LAST_HEALTHY_KEY)) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 function cleanupExpired(h: HealthDoc, id: string) {
@@ -68,6 +90,19 @@ export async function markFailure(env: Env, accountID: string, err: unknown): Pr
     h.cooldown[accountID] = new Date(Date.now() + cd).toISOString();
     await putJSON(env["m365-copilot2api_KV"], KEY, h);
   }
+}
+
+// Port of accountPool.MarkImageLimited: the daily image-generation quota is
+// per-account; the account is marked limited until the next UTC midnight so
+// quota exhaustion does not consume the regular rate-limit cooldown (A7).
+export async function markImageLimited(env: Env, accountID: string): Promise<void> {
+  const h = await load(env);
+  const now = new Date();
+  const nextMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0));
+  h.limited[accountID] = true;
+  h.cooldown[accountID] = nextMidnight.toISOString();
+  h.calls[accountID] = h.calls[accountID] ?? 0;
+  await putJSON(env["m365-copilot2api_KV"], KEY, h);
 }
 
 export async function markSuccess(env: Env, accountID: string): Promise<void> {
@@ -122,15 +157,31 @@ function retryAfterOf(err: unknown): number {
 
 export interface ResolvedAccount extends AccountToken {}
 
-// Port of Server.resolveAccount: round-robin over enabled, healthy accounts.
+// Port of Server.resolveAccount (C4): prefer the last healthy account, only
+// rotate on failure; round-robin over enabled, healthy accounts otherwise.
 export async function resolveAccount(env: Env, requestedID: string): Promise<AccountToken> {
   if (requestedID === "") {
+    // Prefer the last successful account so consecutive requests land on the
+    // same cloud session (upstream lastHealthyAccount semantics).
+    const preferred = await lastHealthyAccountID(env);
+    if (preferred !== "") {
+      if (await available(env, preferred)) {
+        try {
+          const acc = await ensureValid(env, preferred);
+          if (acc && scheduleEnabled(acc)) return acc;
+        } catch {
+          /* fall through to round-robin */
+        }
+      }
+    }
     for (let i = 0; i < MAX_ACCOUNT_PROBE; i++) {
       const acc = await nextAccount(env);
       if (!acc) throw new Error("no accounts; login first");
       if (!(await available(env, acc.id))) continue;
       if (!scheduleEnabled(acc)) throw new Error("no accounts enabled for scheduling");
-      return ensureValid(env, acc.id);
+      const validated = await ensureValid(env, acc.id);
+      await rememberHealthy(env, validated.id);
+      return validated;
     }
     // All cooling down.
     const anyAcc = await nextAccount(env);
@@ -146,7 +197,9 @@ export async function resolveAccount(env: Env, requestedID: string): Promise<Acc
     err.name = "UpstreamHTTPError";
     throw err;
   }
-  return ensureValid(env, requestedID);
+  const acc = await ensureValid(env, requestedID);
+  await rememberHealthy(env, acc.id);
+  return acc;
 }
 
 // Port of Server.nextHealthyAccount.

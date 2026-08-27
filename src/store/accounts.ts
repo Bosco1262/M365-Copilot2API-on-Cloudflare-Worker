@@ -1,4 +1,13 @@
-// Account store on KV (port of internal/auth/cache.go Store).
+// Account store (port of internal/auth/cache.go Store).
+//
+// Storage audit P1-1: with the D1 binding present, accounts live in the
+// accounts table (migrations/0003_storage_audit.sql) and are written with
+// row-scoped / conditional statements, because AAD refresh tokens are
+// single-use: the old whole-document KV read-modify-write could interleave
+// with status/schedule writes and silently drop a freshly redeemed refresh
+// token (which permanently kills the account). The legacy KV "accounts"
+// document is mirrored on every mutation for rollback safety, and legacy
+// KV-only accounts are backfilled lazily on first read.
 
 import type { AccountToken, TokenSet } from "../types";
 import { firstNonEmpty, nowIso } from "../util";
@@ -13,42 +22,256 @@ interface AccountsDoc {
 }
 
 const KEY = "accounts";
+const CURSOR_KEY = "accounts-cursor";
 
 function emptyDoc(): AccountsDoc {
   return { accounts: [], nextIdx: 0 };
 }
 
-export async function listAccounts(env: Env): Promise<AccountToken[]> {
-  const doc = await getJSON<AccountsDoc>(env["m365-copilot2api_KV"], KEY);
-  return doc?.accounts ?? [];
+// ------------------------------------------------------------- D1 layer ---
+
+interface AccountRow {
+  id: string;
+  email: string;
+  display_name: string;
+  status: string;
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+  updated_at: string;
+  oid: string;
+  tid: string;
+  client_id: string;
+  schedule_disabled: number;
+}
+
+const ACCOUNT_COLS =
+  "id, email, display_name, status, access_token, refresh_token, expires_at, updated_at, oid, tid, client_id, schedule_disabled";
+
+function rowToAccount(r: AccountRow): AccountToken {
+  return {
+    id: r.id,
+    email: r.email,
+    displayName: r.display_name,
+    status: r.status,
+    accessToken: r.access_token,
+    refreshToken: r.refresh_token || undefined,
+    expiresAt: r.expires_at,
+    updatedAt: r.updated_at,
+    oid: r.oid || undefined,
+    tid: r.tid || undefined,
+    clientId: r.client_id || undefined,
+    scheduleDisabled: !!r.schedule_disabled,
+  };
+}
+
+function accountValues(a: AccountToken): (string | number | null)[] {
+  return [
+    a.id,
+    a.email ?? "",
+    a.displayName ?? "",
+    a.status,
+    a.accessToken ?? "",
+    a.refreshToken ?? "",
+    a.expiresAt ?? "",
+    a.updatedAt,
+    a.oid ?? "",
+    a.tid ?? "",
+    a.clientId ?? "",
+    a.scheduleDisabled ? 1 : 0,
+  ];
+}
+
+// Full-row insert; on an id conflict (concurrent create) the caller retries
+// through the update path.
+const INSERT_SQL = `INSERT INTO accounts (${ACCOUNT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+// Row write guarded by the expected updated_at (optimistic lock): a lost race
+// yields changes=0 and the caller re-reads and retries instead of clobbering
+// the concurrent writer. The empty-refresh-token CASE keeps an existing
+// refresh token when the incoming TokenSet carries none.
+const UPDATE_SQL = `UPDATE accounts SET
+  email = ?, display_name = ?, status = ?, access_token = ?,
+  refresh_token = CASE WHEN ? <> '' THEN ? ELSE refresh_token END,
+  expires_at = ?, updated_at = ?, oid = ?, tid = ?, client_id = ?, schedule_disabled = ?
+WHERE id = ? AND updated_at = ?`;
+
+async function d1List(env: Env): Promise<AccountToken[] | null> {
+  if (!env.DB) return null;
+  try {
+    const res = await env.DB
+      .prepare(`SELECT ${ACCOUNT_COLS} FROM accounts ORDER BY rowid`)
+      .all<AccountRow>();
+    return res.results.map(rowToAccount);
+  } catch (e) {
+    console.warn("[accounts] D1 list failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** One-time lazy migration: KV doc -> D1 rows when the table is still empty. */
+async function d1BackfillFromKV(env: Env): Promise<void> {
+  if (!env.DB) return;
+  const rows = await d1List(env);
+  if (!rows || rows.length > 0) return;
+  const doc = await loadDoc(env);
+  if (doc.accounts.length === 0) return;
+  for (const a of doc.accounts) {
+    try {
+      await env.DB.prepare(INSERT_SQL).bind(...accountValues(a)).run();
+    } catch {}
+  }
+  console.log(`[accounts] backfilled ${doc.accounts.length} KV accounts into D1`);
+}
+
+/** Mirror one mutation into the legacy KV document (rollback safety net). */
+async function mirrorToKV(
+  env: Env,
+  mutate: (accounts: AccountToken[]) => boolean
+): Promise<void> {
+  try {
+    const doc = await loadDoc(env);
+    if (mutate(doc.accounts)) {
+      await putJSON(env["m365-copilot2api_KV"], KEY, doc);
+    }
+  } catch (e) {
+    console.warn("[accounts] KV mirror failed:", e instanceof Error ? e.message : e);
+  }
+}
+
+/** Atomic row upsert with one optimistic-lock retry (see UPDATE_SQL). */
+async function d1Upsert(env: Env, acc: AccountToken, expectedUpdatedAt?: string): Promise<boolean> {
+  const db = env.DB!;
+  const existing = (
+    await db
+      .prepare(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE id = ? OR (? <> '' AND email = ?)`)
+      .bind(acc.id, acc.email ?? "", acc.email ?? "")
+      .first<AccountRow>()
+  );
+  if (!existing) {
+    try {
+      await db.prepare(INSERT_SQL).bind(...accountValues(acc)).run();
+      return true;
+    } catch {
+      // Concurrent insert won the race: fall through to the update path.
+    }
+  }
+  const cur = existing ?? (
+    await db
+      .prepare(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE id = ?`)
+      .bind(acc.id)
+      .first<AccountRow>()
+  );
+  if (!cur) return false;
+  // Merge semantics ported from the old KV upsert: never blank out fields the
+  // new token set does not carry.
+  const merged: AccountToken = { ...acc };
+  merged.refreshToken = acc.refreshToken || rowToAccount(cur).refreshToken;
+  merged.tid = acc.tid ?? rowToAccount(cur).tid;
+  merged.oid = acc.oid ?? rowToAccount(cur).oid;
+  merged.scheduleDisabled = acc.scheduleDisabled ?? rowToAccount(cur).scheduleDisabled;
+  const expect = expectedUpdatedAt ?? cur.updated_at;
+  const res = (await db
+    .prepare(UPDATE_SQL)
+    .bind(
+      merged.email ?? "",
+      merged.displayName ?? "",
+      merged.status,
+      merged.accessToken ?? "",
+      merged.refreshToken ?? "",
+      merged.refreshToken ?? "",
+      merged.expiresAt ?? "",
+      merged.updatedAt,
+      merged.oid ?? "",
+      merged.tid ?? "",
+      merged.clientId ?? "",
+      merged.scheduleDisabled ? 1 : 0,
+      cur.id,
+      expect
+    )
+    .run()) as { meta?: { changes?: number } };
+  if ((res?.meta?.changes ?? 0) > 0) return true;
+  // Optimistic-lock miss: another writer updated the row concurrently.
+  // Re-read once and retry against its updated_at.
+  const fresh = (
+    await db
+      .prepare(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE id = ?`)
+      .bind(cur.id)
+      .first<AccountRow>()
+  );
+  if (!fresh) return false;
+  const retry: AccountToken = { ...merged };
+  retry.refreshToken = merged.refreshToken || rowToAccount(fresh).refreshToken;
+  const res2 = (await db
+    .prepare(UPDATE_SQL)
+    .bind(
+      retry.email ?? "",
+      retry.displayName ?? "",
+      retry.status,
+      retry.accessToken ?? "",
+      retry.refreshToken ?? "",
+      retry.refreshToken ?? "",
+      retry.expiresAt ?? "",
+      retry.updatedAt,
+      retry.oid ?? "",
+      retry.tid ?? "",
+      retry.clientId ?? "",
+      retry.scheduleDisabled ? 1 : 0,
+      fresh.id,
+      fresh.updated_at
+    )
+    .run()) as { meta?: { changes?: number } };
+  return (res2?.meta?.changes ?? 0) > 0;
+}
+
+// ---------------------------------------------------------- KV helpers ---
+
+async function loadDoc(env: Env): Promise<AccountsDoc> {
+  return (await getJSON<AccountsDoc>(env["m365-copilot2api_KV"], KEY)) ?? emptyDoc();
 }
 
 async function saveDoc(env: Env, doc: AccountsDoc): Promise<void> {
   await putJSON(env["m365-copilot2api_KV"], KEY, doc);
 }
 
-async function loadDoc(env: Env): Promise<AccountsDoc> {
-  return (await getJSON<AccountsDoc>(env["m365-copilot2api_KV"], KEY)) ?? emptyDoc();
+// ---------------------------------------------------------- public API ---
+
+export async function listAccounts(env: Env): Promise<AccountToken[]> {
+  if (env.DB) {
+    await d1BackfillFromKV(env);
+    const rows = await d1List(env);
+    if (rows) return rows;
+  }
+  const doc = await loadDoc(env);
+  return doc.accounts;
 }
 
 // Round-robin over all accounts (port of Store.Next). With the coordination
-// DO bound the cursor lives in the DO (atomic across isolates) and the KV
+// DO bound the cursor lives in the DO (atomic across isolates). Without it the
+// fallback cursor is a tiny dedicated KV key, so the (potentially large)
 // accounts document is no longer rewritten on every rotation.
 export async function nextAccount(env: Env): Promise<AccountToken | null> {
-  const doc = await loadDoc(env);
-  const n = doc.accounts.length;
+  const accounts = await listAccounts(env);
+  const n = accounts.length;
   if (n === 0) return null;
   const picked = await coordNextAccountID(
     env,
-    doc.accounts.map((a) => a.id)
+    accounts.map((a) => a.id)
   );
   if (picked !== null) {
-    const idx = Math.max(0, doc.accounts.findIndex((a) => a.id === picked));
-    return doc.accounts[idx];
+    const idx = Math.max(0, accounts.findIndex((a) => a.id === picked));
+    return accounts[idx];
   }
-  const acc = doc.accounts[doc.nextIdx % n];
-  doc.nextIdx = (doc.nextIdx + 1) % n;
-  await saveDoc(env, doc); // persist rotation; cheap and keeps behavior stable
+  let cursorDoc = await getJSON<{ nextIdx: number }>(env["m365-copilot2api_KV"], CURSOR_KEY);
+  if (!cursorDoc) {
+    // First rotation after the storage-audit change: inherit the legacy
+    // nextIdx so the round-robin position stays continuous.
+    const legacy = await loadDoc(env);
+    cursorDoc = { nextIdx: legacy.nextIdx ?? 0 };
+  }
+  const acc = accounts[cursorDoc.nextIdx % n];
+  cursorDoc.nextIdx = (cursorDoc.nextIdx + 1) % Number.MAX_SAFE_INTEGER;
+  await putJSON(env["m365-copilot2api_KV"], CURSOR_KEY, cursorDoc);
   return acc;
 }
 
@@ -75,6 +298,25 @@ export async function upsertAccount(env: Env, tok: TokenSet): Promise<AccountTok
     tid: tok.tenant_id,
     clientId: oauthConfig(env).clientId,
   };
+  if (env.DB) {
+    try {
+      const ok = await d1Upsert(env, acc);
+      if (ok) {
+        await mirrorToKV(env, (list) => {
+          const i = list.findIndex(
+            (a) => a.id === acc.id || (acc.email !== "" && a.email === acc.email)
+          );
+          if (i >= 0) list[i] = acc;
+          else list.push(acc);
+          return true;
+        });
+        return acc;
+      }
+      console.warn("[accounts] D1 upsert reported no changes; KV path used");
+    } catch (e) {
+      console.warn("[accounts] D1 upsert failed, falling back to KV:", e instanceof Error ? e.message : e);
+    }
+  }
   const doc = await loadDoc(env);
   let found = false;
   for (let i = 0; i < doc.accounts.length; i++) {
@@ -95,12 +337,46 @@ export async function upsertAccount(env: Env, tok: TokenSet): Promise<AccountTok
 }
 
 export async function deleteAccount(env: Env, id: string): Promise<void> {
-  const doc = await loadDoc(env);
-  doc.accounts = doc.accounts.filter((a) => a.id !== id);
-  await saveDoc(env, doc);
+  if (env.DB) {
+    try {
+      await env.DB.prepare("DELETE FROM accounts WHERE id = ? OR oid = ? OR email = ?")
+        .bind(id, id, id)
+        .run();
+    } catch (e) {
+      console.warn("[accounts] D1 delete failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  await mirrorToKV(env, (list) => {
+    const before = list.length;
+    const kept = list.filter((a) => a.id !== id);
+    list.length = 0;
+    list.push(...kept);
+    return before !== kept.length;
+  });
 }
 
 export async function setScheduleEnabled(env: Env, id: string, enabled: boolean): Promise<boolean> {
+  if (env.DB) {
+    try {
+      const res = (await env.DB
+        .prepare("UPDATE accounts SET schedule_disabled = ?, updated_at = ? WHERE id = ?")
+        .bind(enabled ? 0 : 1, nowIso(), id)
+        .run()) as { meta?: { changes?: number } };
+      if ((res?.meta?.changes ?? 0) > 0) {
+        await mirrorToKV(env, (list) => {
+          const a = list.find((x) => x.id === id);
+          if (!a) return false;
+          a.scheduleDisabled = !enabled;
+          a.updatedAt = nowIso();
+          return true;
+        });
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.warn("[accounts] D1 schedule update failed, falling back to KV:", e instanceof Error ? e.message : e);
+    }
+  }
   const doc = await loadDoc(env);
   for (const a of doc.accounts) {
     if (a.id === id) {
@@ -129,6 +405,27 @@ export async function countAccounts(env: Env): Promise<number> {
 export async function updateRefreshToken(env: Env, id: string, refreshToken: string): Promise<boolean> {
   const trimmed = refreshToken.trim();
   if (trimmed === "") return true;
+  if (env.DB) {
+    try {
+      const res = (await env.DB
+        .prepare("UPDATE accounts SET refresh_token = ?, updated_at = ? WHERE id = ?")
+        .bind(trimmed, nowIso(), id)
+        .run()) as { meta?: { changes?: number } };
+      if ((res?.meta?.changes ?? 0) > 0) {
+        await mirrorToKV(env, (list) => {
+          const a = list.find((x) => x.id === id);
+          if (!a) return false;
+          a.refreshToken = trimmed;
+          a.updatedAt = nowIso();
+          return true;
+        });
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.warn("[accounts] D1 refresh update failed, falling back to KV:", e instanceof Error ? e.message : e);
+    }
+  }
   const doc = await loadDoc(env);
   for (const a of doc.accounts) {
     if (a.id === id) {
@@ -178,7 +475,7 @@ export async function ensureValid(env: Env, id: string): Promise<AccountToken> {
   const mux = await coordMutexAcquire(env, muxKey, REFRESH_MUTEX_TTL_MS);
   if (mux && !mux.ok) {
     // Another isolate is redeeming the refresh token right now: wait for its
-    // result to land in KV instead of burning a second single-use token.
+    // result to land in storage instead of burning a second single-use token.
     const deadline = Date.now() + REFRESH_REMOTE_WAIT_MS;
     while (Date.now() < deadline) {
       await sleepMs(400);
@@ -207,6 +504,26 @@ export async function ensureValid(env: Env, id: string): Promise<AccountToken> {
 }
 
 async function markStatus(env: Env, id: string, status: string): Promise<void> {
+  if (env.DB) {
+    try {
+      // Column-scoped update: never touches the token columns, so it cannot
+      // clobber a concurrently redeemed refresh token (audit P1-1).
+      await env.DB
+        .prepare("UPDATE accounts SET status = ?, updated_at = ? WHERE id = ?")
+        .bind(status, nowIso(), id)
+        .run();
+      await mirrorToKV(env, (list) => {
+        const a = list.find((x) => x.id === id);
+        if (!a) return false;
+        a.status = status;
+        a.updatedAt = nowIso();
+        return true;
+      });
+      return;
+    } catch (e) {
+      console.warn("[accounts] D1 status update failed, falling back to KV:", e instanceof Error ? e.message : e);
+    }
+  }
   const doc = await loadDoc(env);
   for (const a of doc.accounts) {
     if (a.id === id) {

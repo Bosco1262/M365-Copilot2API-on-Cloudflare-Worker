@@ -33,8 +33,11 @@ export async function computeSysHash(messages: OaiMsg[]): Promise<string> {
   return sha256Hex(parts.join("\n"));
 }
 
-export function convCacheKeyFor(keyHash: string, accountId: string, model: string): string {
-  return `convcache:${keyHash || "anon"}|${accountId || "auto"}|${model || "default"}`;
+// Port of conv_cache.go key(accountID, model): the bucket is per
+// (account, model) — API key is deliberately NOT part of the key, matching
+// the upstream single-instance cache (C7).
+export function convCacheKeyFor(accountId: string, model: string): string {
+  return `convcache:${accountId || "auto"}|${model || "default"}`;
 }
 
 export async function getConvCache(env: Env, key: string): Promise<ConvCacheEntry | null> {

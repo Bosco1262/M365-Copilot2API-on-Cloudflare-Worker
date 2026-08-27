@@ -192,7 +192,26 @@ export async function usageLogs(
   limit: number,
   offset: number
 ): Promise<{ logs: UsageRecord[]; total: number }> {
-  const recs = await loadWindow(env, 90);
+  if (env.DB) {
+    // Storage audit P2-2: push LIMIT/OFFSET/ORDER BY down to SQL instead of
+    // loading the whole 90-day window and slicing it in JS.
+    const totalRow = await env.DB
+      .prepare("SELECT COUNT(*) AS n FROM usage_events")
+      .first<{ n: number }>();
+    const total = totalRow?.n ?? 0;
+    const res = await env.DB
+      .prepare("SELECT json FROM usage_events ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?")
+      .bind(limit, offset)
+      .all<{ json: string }>();
+    const logs: UsageRecord[] = [];
+    for (const row of res.results) {
+      try {
+        logs.push(JSON.parse(row.json) as UsageRecord);
+      } catch {}
+    }
+    return { logs, total };
+  }
+  const recs = await loadWindowKV(env, 90);
   const total = recs.length;
   let off = offset;
   if (off > total) off = total;

@@ -18,6 +18,7 @@ import {
   resolveAndValidateAccount,
   chatCall,
   failoverChat,
+  canFailover,
   recordFinalize,
   DEFAULT_MODEL,
   type OaiReqBody,
@@ -69,6 +70,10 @@ export function anthropicToOpenAI(body: AnthropicRequest): { o: OaiReqBody; erro
   if ((body.max_tokens ?? 0) > 0) {
     o.max_completion_tokens = body.max_tokens;
   }
+  // C10: stop_sequences parity (protocol_compat.go 178-180).
+  if (Array.isArray(body.stop_sequences) && body.stop_sequences.length > 0) {
+    o.stop = body.stop_sequences;
+  }
   const messages: OaiMsg[] = [];
   if (body.system != null) {
     const sys =
@@ -91,6 +96,7 @@ export function anthropicToOpenAI(body: AnthropicRequest): { o: OaiReqBody; erro
     }
     let hasText = false;
     const textParts: unknown[] = [];
+    const calls: Record<string, unknown>[] = [];
     for (const raw of m.content) {
       if (!raw || typeof raw !== "object") continue;
       const b = raw as Record<string, unknown>;
@@ -122,10 +128,12 @@ export function anthropicToOpenAI(body: AnthropicRequest): { o: OaiReqBody; erro
           break;
         }
         case "tool_use":
-          // Rendered into the flattened prompt as text.
-          textParts.push({
-            type: "text",
-            text: `[tool_call ${String(b["name"] ?? "")}] ${mustJSON(b["input"])}`,
+          // C9: structured assistant tool_calls (protocol_compat.go 231-232
+          // parity) so downstream flatten/ledger logic sees real calls.
+          calls.push({
+            id: b["id"],
+            type: "function",
+            function: { name: b["name"], arguments: mustJSON(b["input"]) },
           });
           hasText = true;
           break;
@@ -142,7 +150,11 @@ export function anthropicToOpenAI(body: AnthropicRequest): { o: OaiReqBody; erro
       }
     }
     if (hasText) {
-      messages.push({ role: m.role, content: textParts });
+      messages.push({
+        role: m.role,
+        content: textParts,
+        tool_calls: calls.length > 0 ? calls : undefined,
+      });
     }
   }
   o.messages = messages;
@@ -404,18 +416,22 @@ async function streamAnthropicMessages(ctx: HandlerCtx, body: AnthropicRequest):
   let acc = accRes.acc;
 
   const settings = await getSettings(ctx.env);
-  const canFailover = (): boolean => !prepared.accountID && !prepared.conversationID;
   const hasTools = prepared.toolMaps.length > 0;
   const model = body.model || DEFAULT_MODEL;
   const id = "msg_" + uuid();
   const releaseAcc = accRes.release;
+  // Streamed-content guard: once any block reached the client, failover must
+  // not switch accounts (server.go streamedReasoningLen==0 guard, A1).
+  let emittedAny = false;
 
   const { readable, writable } = new TransformStream<Uint8Array>();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
   const raw = (payload: string) => writer.write(encoder.encode(payload));
-  const emit = (name: string, value: unknown) =>
+  const emit = (name: string, value: unknown) => {
+    emittedAny = true;
     raw(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`);
+  };
 
   const work = (async () => {
     const state: StreamState = { nextIndex: 0, openBlockType: null };
@@ -492,7 +508,7 @@ async function streamAnthropicMessages(ctx: HandlerCtx, body: AnthropicRequest):
           onDelta: (p) => emitTextHoldback(p),
         });
       } catch (err) {
-        if (canFailover()) {
+        if (!emittedAny && canFailover(prepared, err)) {
           ({ acc, res } = await failoverChat(ctx, prepared, acc, err, {
             onReasoning: (p) => {
               if (p === "") return;

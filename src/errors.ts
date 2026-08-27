@@ -17,12 +17,62 @@ export class UpstreamHTTPError extends Error {
 export class DialError extends Error {
   status: number;
   retryAfter: number;
-  constructor(status: number, retryAfter = 0) {
-    super(`ws dial: upstream ${status}`);
+  /** Transport/upstream classification (port of chathub DialError.Kind, C3). */
+  kind: string;
+  constructor(status: number, retryAfter = 0, kind = "") {
+    super(kind !== "" ? `ws dial: ${kind} upstream ${status}` : `ws dial: upstream ${status}`);
     this.name = "DialError";
     this.status = status;
     this.retryAfter = retryAfter;
+    this.kind = kind;
   }
+}
+
+// Port of chathub.classifyTransportError: maps an error message onto a
+// transport category so cooldowns and diagnostics can be bucketed (C3).
+export function classifyTransportError(msg: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes("socks")) return "SOCKS5";
+  if (
+    m.includes("no such host") ||
+    m.includes("no address associated") ||
+    m.includes("name resolution") ||
+    m.includes("dns")
+  ) {
+    return "DNS";
+  }
+  if (m.includes("tls") || m.includes("certificate") || m.includes("x509")) return "TLS";
+  if (m.includes("handshake")) return "WS_HANDSHAKE";
+  if (
+    m.includes("i/o timeout") ||
+    m.includes("deadline exceeded") ||
+    (m.includes("timeout") && m.includes("read"))
+  ) {
+    return "WS_READ_TIMEOUT";
+  }
+  if (
+    m.includes("connection refused") ||
+    m.includes("connection reset") ||
+    m.includes("broken pipe") ||
+    m.includes("network is unreachable") ||
+    m.includes("connection was forcibly closed")
+  ) {
+    return "TCP";
+  }
+  if (m.includes("timeout")) return "WS_READ_TIMEOUT";
+  return "TCP";
+}
+
+// Port of chathub.wrapDialError: HTTP status kinds take precedence; otherwise
+// classify the transport error (C3).
+export function dialErrorKind(status: number, cause?: unknown): string {
+  if (status === 429) return "QUOTA_429";
+  if (status === 503) return "OVERLOAD_503";
+  if (status === 401) return "AUTH_EXPIRED_401";
+  if (status === 403) return "FORBIDDEN_403";
+  if (cause instanceof Error && cause.name === "AbortError") return "CLIENT_CANCELED";
+  if (cause instanceof Error) return classifyTransportError(cause.message);
+  return "";
 }
 
 export class RateLimitNotice extends Error {
@@ -36,6 +86,20 @@ export class EmptyCompletion extends Error {
   constructor() {
     super("upstream returned empty completion; tone may be unavailable for this tenant");
     this.name = "EmptyCompletion";
+  }
+}
+
+export class ImageLimitError extends Error {
+  constructor() {
+    super("upstream image generation daily limit reached");
+    this.name = "ImageLimitError";
+  }
+}
+
+export class ContentPolicyError extends Error {
+  constructor() {
+    super("upstream content policy flagged as offensive");
+    this.name = "ContentPolicyError";
   }
 }
 
@@ -77,6 +141,14 @@ export function isEmptyCompletion(err: unknown): boolean {
   return err instanceof EmptyCompletion;
 }
 
+export function isImageLimited(err: unknown): boolean {
+  return err instanceof ImageLimitError;
+}
+
+export function isContentPolicy(err: unknown): boolean {
+  return err instanceof ContentPolicyError;
+}
+
 export function retryAfterSeconds(err: unknown): number {
   const e = anyErr(err);
   if (!e) return 0;
@@ -96,6 +168,10 @@ export function describeUpstream(err: unknown): string {
   if (name === "RateLimitNotice") return "upstream is rate limiting; try again shortly";
   if (name === "EmptyCompletion")
     return "upstream returned empty completion; the requested model may be unavailable for this tenant";
+  if (name === "ImageLimitError")
+    return "upstream image generation daily limit reached; try again tomorrow or switch account";
+  if (name === "ContentPolicyError")
+    return "M365 content policy flagged this request; try again or switch account";
   if (name === "DialError") {
     const status = (err as DialError).status;
     if (status === 429 || status === 401 || status === 403) {
