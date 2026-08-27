@@ -275,40 +275,67 @@ export function fencedToolCalls(
   return out;
 }
 
-// Port of nativeToolCalls: only invocations actually present in ChatHub frames.
-export function nativeToolCalls(events: unknown[], declaredFunctions: { name: string }[]): DetectedToolCall[] {
-  const allowed = new Set(declaredFunctions.map((f) => f.name).filter(Boolean));
-  const out: DetectedToolCall[] = [];
+// Port of extractToolEvents (chathub/events.go + native_tools.go): recursively
+// walks ALL levels of an update frame's raw arguments (not just messages[]) and
+// records every object that carries BOTH a name-ish field and an
+// arguments-ish field as a tool invocation. Dedupes by name+JSON(args).
+const TOOL_NAME_KEYS = ["name", "toolName", "pluginName", "functionName"];
+const TOOL_ARGS_KEYS = ["arguments", "args", "parameters", "input", "functionArguments"];
+
+export interface ToolEvent {
+  toolName: string;
+  arguments: unknown;
+}
+
+export function extractToolEvents(raw: unknown): ToolEvent[] {
+  const out: ToolEvent[] = [];
+  const seen = new Set<string>();
   const walk = (v: unknown): void => {
     if (Array.isArray(v)) {
       for (const y of v) walk(y);
       return;
     }
-    if (v && typeof v === "object") {
-      const x = v as ToolMap;
-      let name = "";
-      for (const k of ["name", "toolName", "pluginName", "functionName", "id"]) {
-        const s = x[k];
-        if (typeof s === "string" && allowed.has(s)) {
-          name = s;
-          break;
-        }
+    if (!v || typeof v !== "object") return;
+    const x = v as ToolMap;
+    let name = "";
+    for (const k of TOOL_NAME_KEYS) {
+      const s = x[k];
+      if (typeof s === "string" && s.trim() !== "") {
+        name = s.trim();
+        break;
       }
-      if (name !== "") {
-        for (const k of ["arguments", "args", "parameters", "input", "functionArguments"]) {
-          if (k in x) {
-            const a = x[k];
-            if (a != null) {
-              out.push({ id: "call_" + uuid(), type: "", name, arguments: JSON.stringify(a) });
-              return;
-            }
-          }
-        }
-      }
-      for (const y of Object.values(x)) walk(y);
     }
+    if (name !== "") {
+      for (const k of TOOL_ARGS_KEYS) {
+        if (k in x && x[k] !== null && x[k] !== undefined) {
+          const key = name + "\u0000" + JSON.stringify(x[k]);
+          if (!seen.has(key)) {
+            seen.add(key);
+            out.push({ toolName: name, arguments: x[k] });
+          }
+          // Recorded: do not descend into the invocation itself (the argument
+          // payload frequently embeds a copy of the same call).
+          return;
+        }
+      }
+    }
+    for (const y of Object.values(x)) walk(y);
   };
-  for (const ev of events) walk(ev);
+  walk(raw);
+  return out;
+}
+
+// Port of nativeToolCalls: converts events actually present in ChatHub frames
+// into detected calls, accepting ONLY client-declared tool names. Never
+// inferred from prose.
+export function nativeToolCalls(events: unknown[], declaredNames: Set<string>): DetectedToolCall[] {
+  const out: DetectedToolCall[] = [];
+  for (const ev of extractToolEvents(events)) {
+    if (!declaredNames.has(ev.toolName)) continue;
+    const args =
+      ev.arguments === null || ev.arguments === undefined ? "{}" : JSON.stringify(ev.arguments);
+    out.push({ id: "call_" + uuid(), type: "", name: ev.toolName, arguments: args });
+  }
   return out;
 }
 
@@ -385,6 +412,31 @@ ${rules}
 
 User request and evidence:
 ${prompt}`;
+}
+
+// Answer-turn tool protocol injected into the prompt whenever the client
+// declares tools. Without it the model never emits invocations in a form the
+// gateway can convert (the router pre-call does not run on the streaming
+// path), so streamed tool-enabled chats silently degrade to plain answers.
+// Emits fenced blocks that fencedToolCalls() detects post-answer.
+export function toolUseInstructions(tools: ToolMap[]): string {
+  const defs = JSON.stringify(tools);
+  return [
+    "",
+    "# Tool calling",
+    "You have real tools available. They execute on the caller's machine and return results to you.",
+    "Available tools:",
+    defs,
+    "To invoke a tool, respond with a fenced code block whose info string is the exact tool name and whose body is a JSON object of arguments, for example:",
+    "```tool_name",
+    '{"argument": "value"}',
+    "```",
+    "Rules:",
+    "- When an action is required, emit the invocation block INSTEAD of describing or claiming the action.",
+    "- You may add a short lead-in sentence before the block.",
+    "- Only call tools from the list above; never invent tool names.",
+    "- Do not claim a tool already ran unless its result appears in the conversation.",
+  ].join("\n");
 }
 
 // Port of parseModelToolDecision.

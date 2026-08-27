@@ -20,9 +20,49 @@
 	"kv_namespaces": [
 		{
 			"binding": "m365-copilot2api_KV",
-			"id": "0ebbe8adff364c2bb1899179372100fb"
+			"id": "6523e62855e040b8b7ce602c15a50012"
 			// CLI deploys: uncomment and fill in your namespace id:
 			// , "id": "your-kv-namespace-id"
+		}
+	],
+	// D1 (usage events + debug records). Create once:
+	//   npx wrangler d1 create m365-copilot2api
+	//   npx wrangler d1 migrations apply m365-copilot2api --remote
+	// then paste the returned database_id below. Without a binding the app
+	// falls back to legacy KV storage automatically.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "m365-copilot2api",
+			"database_id": "1257ab3c-b740-4324-b286-a3bd8f3b2962",
+			"migrations_dir": "migrations"
+		}
+	],
+	// Durable Objects (MCP cross-isolate sessions + global coordination:
+	// admin-login lockout, account round-robin cursor, per-account concurrency
+	// semaphore, token-refresh mutex). Free plan supported (SQLite-backed
+	// classes). Without the COORD binding every consumer falls back to the
+	// previous isolate-local behavior automatically.
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "MCP_HUB",
+				"class_name": "McpSessionDO"
+			},
+			{
+				"name": "COORD",
+				"class_name": "CoordinationDO"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["McpSessionDO"]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": ["CoordinationDO"]
 		}
 	],
 	"triggers": {

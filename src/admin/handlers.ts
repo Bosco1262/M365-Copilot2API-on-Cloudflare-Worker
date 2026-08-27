@@ -10,7 +10,7 @@ import {
   extractOIDTID,
 } from "../util";
 import { describeUpstream } from "../errors";
-import { oauthConfig, type Env } from "../env";
+import { effectiveOAuthConfig, type Env } from "../env";
 import * as accountsStore from "../store/accounts";
 import type { AccountToken } from "../types";
 import * as keysStore from "../store/keys";
@@ -31,6 +31,15 @@ import {
 } from "../auth/oauth";
 import { modelCatalog, reasoningTone } from "../pipeline/catalog";
 import { firstAccountCloudClient } from "../pipeline/m365cloud";
+import { coordLockoutCheck, coordLockoutRecord } from "../do/coordination";
+
+function clientIP(ctx: HandlerCtx): string {
+  return (
+    ctx.req.headers.get("CF-Connecting-IP") ??
+    ctx.req.headers.get("X-Forwarded-For")?.split(",")[0].trim() ??
+    ""
+  );
+}
 
 function cookieValue(ctx: HandlerCtx, name: string): string | undefined {
   const cookie = ctx.req.headers.get("Cookie") ?? "";
@@ -71,8 +80,27 @@ export async function handleLogin(ctx: HandlerCtx): Promise<Response> {
   } catch {
     return writeOpenAIError(400, "invalid_request_error", "bad json");
   }
+  // Global login-failure lockout (5 failures / 15 min) when the coordination
+  // DO is bound; unbound deployments keep the previous behavior.
+  const ip = clientIP(ctx);
+  if (ip !== "") {
+    const lock = await coordLockoutCheck(ctx.env, ip);
+    if (lock?.locked) {
+      return jsonOut(
+        {
+          error: {
+            message: "too many failed login attempts; try again later",
+            type: "rate_limit_error",
+          },
+        },
+        429,
+        { "Retry-After": String(lock.retryAfterSec ?? 900) }
+      );
+    }
+  }
   const { ok, mustChange } = await adminStore.verifyAdminPassword(ctx.env, password);
   if (!ok || password === "") {
+    if (ip !== "") await coordLockoutRecord(ctx.env, ip);
     return writeOpenAIError(401, "auth_error", "invalid administrator password");
   }
   const token = await adminStore.createAdminSession(ctx.env);
@@ -149,7 +177,7 @@ export async function handleAuthStart(ctx: HandlerCtx): Promise<Response> {
   const verifier = await newVerifier();
   const state = await newPKCEState(env);
   const challenge = await pkceChallenge(verifier);
-  const cfg = oauthConfig(env);
+  const cfg = await effectiveOAuthConfig(env);
   await savePendingPKCE(env, state, {
     verifier,
     created: nowIso(),
@@ -260,7 +288,7 @@ function accountView(a: AccountToken): Record<string, unknown> {
 // ------------------------------------------------------------- health etc ---
 export async function handleHealth(ctx: HandlerCtx): Promise<Response> {
   const list = await accountsStore.listAccounts(ctx.env);
-  const cfg = oauthConfig(ctx.env);
+  const cfg = await effectiveOAuthConfig(ctx.env);
   return jsonOut({
     status: "ok",
     auth: ["pkce"],
@@ -527,12 +555,20 @@ export async function handleAdminModelSync(ctx: HandlerCtx): Promise<Response> {
     fetchUpstreamTonesAll(ctx),
     new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 31_000)),
   ]);
-  // Persist fetched tones until the next successful sync overwrites them.
-  if (tones.length > 0) {
-    const s = await settingsStore.getSettings(ctx.env);
-    await settingsStore.saveSettings(ctx.env, { ...s, discoveredTones: tones });
-  }
+  await persistDiscoveredTones(ctx.env, tones);
   return jsonOut({ synced: tones.length > 0, upstream_tones: tones, count: tones.length });
+}
+
+// Shared by the manual sync endpoint and the 24h auto-resync in `scheduled`.
+export async function persistDiscoveredTones(env: Env, tones: string[]): Promise<void> {
+  if (tones.length === 0) return;
+  const s = await settingsStore.getSettings(env);
+  const err = await settingsStore.saveSettings(env, {
+    ...s,
+    discoveredTones: tones,
+    discoveredTonesAt: new Date().toISOString(),
+  });
+  if (err) console.warn("[tone-sync] persist failed:", err);
 }
 
 // Port of fetchUpstreamTones from codex_catalog.go.
@@ -607,7 +643,7 @@ function extractTones(text: string): string[] {
 
 // Tries anonymous scraping first, then the authenticated fallback while the
 // overall 31s sync budget still allows it.
-async function fetchUpstreamTonesAll(ctx: HandlerCtx): Promise<string[]> {
+export async function fetchUpstreamTonesAll(ctx: HandlerCtx): Promise<string[]> {
   const started = Date.now();
   try {
     const anon = await fetchUpstreamTones();
@@ -829,6 +865,8 @@ export async function handleConversationDelete(ctx: HandlerCtx): Promise<Respons
   if (!id) return writeOpenAIError(400, "invalid_request_error", "bad json");
   await convStore.deleteLocalConversation(ctx.env, id);
   await convStore.deleteSessionBinding(ctx.env, id);
+  const { deleteByConversation } = await import("../store/chatMessages");
+  await deleteByConversation(ctx.env, id);
   return jsonOut({ status: "deleted" });
 }
 
@@ -913,27 +951,66 @@ export async function handleM365Conversations(ctx: HandlerCtx): Promise<Response
   if (ctx.req.method !== "GET") {
     return writeOpenAIError(405, "invalid_request_error", "method not allowed");
   }
-  const client = await firstAccountCloudClient(ctx.env);
-  if (!client) {
+  const { listAccounts } = await import("../store/accounts");
+  const accounts = await listAccounts(ctx.env);
+  if (accounts.length === 0) {
     return writeOpenAIError(
       503,
       "m365_not_configured",
       "M365 cloud client not configured. Please add an M365 account first via PKCE authorization."
     );
   }
+  const { listConversationsResilient } = await import("../pipeline/m365cloud");
+  const { chats, error } = await listConversationsResilient(ctx.env);
+  if (!chats) return writeOpenAIError(502, "m365_error", sanitizeUpstream(error));
+  // Merge gateway-side resolver sessions so both sources are visible (#8).
+  const merged: Record<string, unknown>[] = [...chats];
   try {
-    const chats = await client.listConversations();
-    return jsonOut({ data: chats });
-  } catch (e) {
-    return writeOpenAIError(502, "m365_error", sanitizeUpstream(e));
-  }
+    const cloudIds = new Set(chats.map((c) => String(c["conversationId"] ?? "")));
+    const { listResolverSessions } = await import("../pipeline/resolver");
+    for (const r of await listResolverSessions(ctx.env)) {
+      if (!r.conversationId || cloudIds.has(r.conversationId)) continue;
+      merged.push({
+        conversationId: r.conversationId,
+        title: r.sessionId ? r.sessionId.slice(0, 24) : "(gateway)",
+        source: "gateway",
+        accountId: r.accountId,
+        lastUsedAt: r.lastUsedAt,
+      });
+    }
+  } catch {}
+  return jsonOut({ data: merged });
 }
 
 export async function handleM365ConversationDetail(ctx: HandlerCtx): Promise<Response> {
   if (ctx.req.method !== "GET") {
     return writeOpenAIError(405, "invalid_request_error", "method not allowed");
   }
-  return jsonOut({ data: [], detail_unavailable: true });
+  const id = ctx.url.searchParams.get("id") ?? "";
+  if (!id) {
+    return writeOpenAIError(400, "invalid_request_error", "id required");
+  }
+  // Transcript rows captured on the /v1/* success path (batch C). Without the
+  // D1 binding there is no stored history; the viewer shows an empty timeline.
+  const { listMessages } = await import("../store/chatMessages");
+  const rows = await listMessages(ctx.env, id);
+  const conv = (await convStore.listConversations(ctx.env)).find((c) => c.id === id);
+  let accountEmail = "";
+  if (conv?.accountID) {
+    const acc = await accountsStore.getAccount(ctx.env, conv.accountID);
+    accountEmail = acc?.email ?? "";
+  }
+  return jsonOut({
+    conversationId: id,
+    chatName: conv?.title ?? "",
+    accountId: conv?.accountID ?? "",
+    accountEmail,
+    createdAt: conv?.createdAt ?? "",
+    updatedAt: conv?.updatedAt ?? "",
+    messageCount: rows.length,
+    messages: rows.map((r) => ({ role: r.role, content: r.content, createdAt: r.createdAt })),
+    detail_unavailable: !ctx.env.DB,
+  });
 }
 
 export async function handleM365Delete(ctx: HandlerCtx): Promise<Response> {
@@ -961,6 +1038,8 @@ export async function handleM365Delete(ctx: HandlerCtx): Promise<Response> {
   try {
     await client.deleteConversation(conversationId);
     await convStore.deleteLocalConversation(ctx.env, conversationId);
+    const { deleteByConversation } = await import("../store/chatMessages");
+    await deleteByConversation(ctx.env, conversationId);
     return jsonOut({ status: "deleted" });
   } catch (e) {
     return writeOpenAIError(502, "m365_error", sanitizeUpstream(e));

@@ -14,6 +14,12 @@ import {
   handleGeneratedImageFile,
 } from "./api/images";
 import { validAPIKey } from "./api/auth";
+import * as extras from "./admin/extras";
+import { handleMcpSse, handleMcpMessage, handleMcpToolsList } from "./mcp/server";
+
+// Durable Objects must be exported from the entrypoint (wrangler requirement).
+export { McpSessionDO } from "./do/mcp-hub";
+export { CoordinationDO } from "./do/coordination";
 import * as adminHandlers from "./admin/handlers";
 import { handleChat, handleChatStream } from "./admin/chat";
 import { hasValidAdminSession } from "./admin/handlers";
@@ -54,15 +60,17 @@ router.on("/api/admin/settings", adminHandlers.handleAdminSettings);
 router.on("/api/admin/deployments", adminHandlers.handleDeployments);
 router.on("/api/admin/deployment/check", adminHandlers.handleDeploymentCheck);
 router.on("/api/admin/deployment", adminHandlers.handleDeploymentAction);
-router.on("/api/admin/debug/logs", adminHandlers.handleDebugLogs);
-router.on("/api/admin/debug/detail", adminHandlers.handleDebugDetail);
+router.on("/api/admin/debug/logs", extras.handleDebugLogs);
+router.on("/api/admin/debug/detail", extras.handleDebugDetail);
+router.on("/api/admin/migrate/usage-kv-to-d1", extras.handleUsageKvBackfill);
+router.on("/api/plugins", extras.handlePluginsList);
 
 // --- conversations ---
 router.on("/api/chat/stream", handleChatStream);
 router.on("/api/chat", handleChat);
 router.on("/api/conversations/delete", adminHandlers.handleConversationDelete);
 router.on("/api/conversations/cleanup", adminHandlers.handleConversationCleanup);
-router.on("/api/conversations/whitelist", adminHandlers.handleConversationWhitelist);
+router.on("/api/conversations/whitelist", extras.handleConversationWhitelist);
 router.on("/api/conversations", adminHandlers.handleConversations);
 router.on("/v1/sessions/", adminHandlers.handleSessionDeleteV1);
 router.on("/v1/sessions", adminHandlers.handleSessionsV1);
@@ -70,6 +78,25 @@ router.on("/api/m365/conversations/detail", adminHandlers.handleM365Conversation
 router.on("/api/m365/conversations/delete", adminHandlers.handleM365Delete);
 router.on("/api/m365/conversations/cleanup", adminHandlers.handleM365Cleanup);
 router.on("/api/m365/conversations", adminHandlers.handleM365Conversations);
+
+// --- memory passthrough (memory_handlers.go port) ---
+router.on("/v1/memory/flags", extras.handleMemoryFlags);
+router.on("/v1/memory/instructions", extras.handleMemoryInstructions);
+router.prefix("/v1/memory/instructions/", extras.handleMemoryInstructionDelete);
+router.on("/v1/memory/settings", extras.handleMemorySettings);
+
+// --- console memory management card (admin-session variants) ---
+router.on("/api/admin/memory/flags", extras.handleAdminMemoryFlags);
+router.on("/api/admin/memory/instructions", extras.handleAdminMemoryInstructions);
+router.prefix("/api/admin/memory/instructions/", extras.handleAdminMemoryInstructionDelete);
+
+// --- MCP gateway (internal/mcp server.go port) ---
+router.on("/v1/mcp/sse", handleMcpSse);
+router.on("/v1/mcp/message", handleMcpMessage);
+router.on("/v1/mcp/tools", handleMcpToolsList);
+
+// --- deployments (empty stubs on Workers) ---
+router.on("/api/admin/deployments", extras.handleDeploymentsList);
 
 // --- stats & usage ---
 router.on("/api/stats/reset", adminHandlers.handleStatsReset);
@@ -87,11 +114,7 @@ router.on("/v1/images/edits", handleImageEdits);
 router.prefix("/v1/images/files/", handleGeneratedImageFile);
 
 // Not yet ported (later phases):
-const NOT_PORTED: Record<string, string> = {
-  "/v1/mcp/sse": "MCP gateway arrives in a later phase",
-  "/v1/mcp/message": "MCP gateway arrives in a later phase",
-  "/v1/mcp/tools": "MCP gateway arrives in a later phase",
-};
+const NOT_PORTED: Record<string, string> = {};
 
 function withSecurityHeaders(resp: Response): Response {
   const headers = new Headers(resp.headers);
@@ -110,7 +133,9 @@ async function authorize(ctx: HandlerCtx): Promise<Response | null> {
     path === "/api/admin/logout" ||
     path === "/api/auth/start" ||
     path === "/api/auth/status" ||
-    path === "/api/auth/callback";
+    path === "/api/auth/callback" ||
+    // upstream HandleSSE performs no API-key check either
+    path === "/v1/mcp/sse";
   if (exempt) return null;
 
   if (path.startsWith("/v1/")) {
@@ -177,17 +202,178 @@ async function handleRequest(env: Env, req: Request, waitUntil: (p: Promise<unkn
   }
 
   const denied = await authorize(ctx);
-  if (denied) return withSecurityHeaders(denied);
+  if (denied) return withSecurityHeaders(withRequestId(denied, ctx));
 
-  const matched = await router.dispatch(ctx);
-  if (matched) return withSecurityHeaders(matched);
+  const isV1 = url.pathname.startsWith("/v1/");
+  const started = Date.now();
+  let reqBodyText: string | undefined;
+  if (
+    isV1 &&
+    req.method !== "GET" &&
+    Number(req.headers.get("content-length") ?? "0") > 0 &&
+    Number(req.headers.get("content-length") ?? "0") < 256 * 1024
+  ) {
+    try {
+      reqBodyText = await req.clone().text();
+    } catch {}
+  }
+
+  const matched0 = await router.dispatch(ctx);
+  if (matched0) {
+    let matched = matched0;
+    if (isV1) {
+      const durationMs = Date.now() - started;
+      const contentType = matched.headers.get("content-type") ?? "";
+      let responseBody: string | undefined;
+      let responseTruncated = false;
+      // #21: SSE streams pass through a passive tap (pure transform — the
+      // client branch is byte-identical and never blocked by the capture);
+      // the aggregated body is recorded after the stream completes.
+      let streamCapture: Promise<{ text: string; truncated: boolean }> | null = null;
+      if (contentType.includes("text/event-stream") && matched.body) {
+        const tapped = createStreamTap(matched.body, 256 * 1024);
+        matched = new Response(tapped.client, matched);
+        streamCapture = tapped.done;
+      } else if (contentType.includes("application/json")) {
+        try {
+          responseBody = (await matched.clone().text()).slice(0, 256 * 1024);
+        } catch {}
+      }
+      ctx.waitUntil(
+        (async () => {
+          try {
+            if (streamCapture) {
+              const agg = await streamCapture;
+              responseBody = agg.text;
+              responseTruncated = agg.truncated;
+            }
+            const { getSettings } = await import("./store/settings");
+            const s = await getSettings(env);
+            const rank: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3, silent: 4 };
+            if ((rank[s.logLevel] ?? 1) > 0) return; // capture only at debug level (upstream parity)
+            const { captureDebugRecord } = await import("./admin/extras");
+            await captureDebugRecord(env, {
+              path: url.pathname,
+              method: req.method,
+              status: matched.status,
+              durationMs,
+              requestBody: reqBodyText,
+              responseBody,
+              responseTruncated,
+            });
+          } catch {}
+        })()
+      );
+    }
+    return withSecurityHeaders(withRequestId(matched, ctx));
+  }
 
   const notPortedMsg = NOT_PORTED[url.pathname];
   if (notPortedMsg) {
     return withSecurityHeaders(jsonOut({ error: { message: notPortedMsg, type: "not_implemented" } }, 501));
   }
 
-  return withSecurityHeaders(writeOpenAIError(404, "not_found", "not found"));
+  return withSecurityHeaders(withRequestId(writeOpenAIError(404, "not_found", "not found"), ctx));
+}
+
+function withRequestId(resp: Response, ctx: HandlerCtx): Response {
+  const headers = new Headers(resp.headers);
+  headers.set("X-Request-ID", ctx.requestId);
+  return new Response(resp.body, { status: resp.status, headers });
+}
+
+// Passive tap for SSE bodies (#21): every chunk is forwarded untouched while
+// a copy is buffered up to cap bytes; the done promise settles on upstream
+// close OR abort, so capture can never stall or alter client delivery.
+export function createStreamTap(
+  source: ReadableStream<Uint8Array>,
+  cap: number
+): { client: ReadableStream<Uint8Array>; done: Promise<{ text: string; truncated: boolean }> } {
+  let total = 0;
+  let truncated = false;
+  let text = "";
+  let settled = false;
+  const dec = new TextDecoder();
+  let settleDone!: (r: { text: string; truncated: boolean }) => void;
+  const done = new Promise<{ text: string; truncated: boolean }>((resolve) => {
+    settleDone = (r) => {
+      if (!settled) {
+        settled = true;
+        resolve(r);
+      }
+    };
+  });
+  const accept = (chunk: Uint8Array): void => {
+    text += dec.decode(chunk, { stream: true });
+    if (text.length >= cap) {
+      text = text.slice(0, cap);
+      truncated = true;
+    }
+  };
+  const client = new ReadableStream<Uint8Array>({
+    start(controller) {
+      void (async () => {
+        const reader = source.getReader();
+        for (;;) {
+          let chunk: ReadableStreamReadResult<Uint8Array>;
+          try {
+            chunk = await reader.read();
+          } catch {
+            settleDone({ text, truncated: true });
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
+            return;
+          }
+          if (chunk.done) break;
+          accept(chunk.value);
+          controller.enqueue(chunk.value);
+        }
+        settleDone({ text, truncated });
+        controller.close();
+      })();
+    },
+    cancel(reason) {
+      void reason;
+      void source.cancel().catch(() => {});
+      settleDone({ text, truncated: true });
+    },
+  });
+  return { client, done };
+}
+
+// Aggregates a stream body up to cap bytes (kept for direct callers/tests).
+export async function collectStreamBody(
+  stream: ReadableStream<Uint8Array>,
+  cap: number
+): Promise<{ text: string; truncated: boolean }> {
+  const reader = stream.getReader();
+  const dec = new TextDecoder();
+  let text = "";
+  let truncated = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += dec.decode(value, { stream: true });
+      if (text.length >= cap) {
+        truncated = true;
+        text = text.slice(0, cap);
+        break;
+      }
+    }
+  } catch {
+    /* partial capture on stream errors */
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+  return { text, truncated };
 }
 
 export default {
@@ -220,6 +406,27 @@ export default {
           console.error("[scheduled] refresh failed:", e);
         }
         try {
+          // Auto tone re-sync: refresh discoveredTones when older than 24h
+          // (port of upstream liveUpstreamTones TTL behavior).
+          const settingsStore = await import("./store/settings");
+          const s = await settingsStore.getSettings(env);
+          const age = s.discoveredTonesAt ? Date.now() - Date.parse(s.discoveredTonesAt) : Infinity;
+          if (age > 24 * 3600_000) {
+            const handlers = await import("./admin/handlers");
+            const ctx = {
+              env,
+              req: new Request("https://local/cron-tone-sync"),
+              url: new URL("https://local/cron-tone-sync"),
+              requestId: "cron-tone-sync",
+              waitUntil: () => {},
+            } as never;
+            const tones = await handlers.fetchUpstreamTonesAll(ctx);
+            await handlers.persistDiscoveredTones(env, tones);
+          }
+        } catch (e) {
+          console.warn("[tone-sync] auto-resync failed:", e instanceof Error ? e.message : e);
+        }
+        try {
           const { cleanupConfig, autoCleanupOnce } = await import("./pipeline/cleanup");
           const cfg = cleanupConfig(env);
           if (cfg.enabled) {
@@ -232,6 +439,13 @@ export default {
           }
         } catch (e) {
           console.error("[scheduled] cleanup failed:", e);
+        }
+        try {
+          // Conversation viewer transcript TTL (batch C).
+          const { cleanupOld } = await import("./store/chatMessages");
+          await cleanupOld(env);
+        } catch (e) {
+          console.warn("[scheduled] chat-messages cleanup failed:", e instanceof Error ? e.message : e);
         }
       })()
     );

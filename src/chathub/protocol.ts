@@ -24,6 +24,8 @@ export interface ChatAccount {
   accessToken: string;
   oid: string;
   tid: string;
+  licenseType?: string;
+  scenario?: string;
 }
 
 // Port of chathub.Attachment.
@@ -43,6 +45,48 @@ export interface ChatRequest {
   sessionId?: string;
   started?: boolean;
   attachments?: Attachment[];
+  // Native planning: tools advertised as API plugins; when set the gateway's
+  // own /v1/mcp/sse endpoint is offered as the mcp-gateway MCPServer plugin.
+  toolPlugins?: { name: string; description?: string; parameters?: unknown }[];
+  mcpServerUrl?: string;
+  // ChatHub identity fields (configurable via settings since port parity pass)
+  licenseType?: string;
+  scenario?: string;
+  // Feature-flag knobs (feature_flags.go port). Only memoryV2 has a verified
+  // payload effect: when false the memory optionsSets are omitted.
+  featureFlags?: { memoryV2?: boolean };
+}
+
+// Port of chathub clientPlugins.
+export function buildChatPlugins(
+  req: Pick<ChatRequest, "toolPlugins" | "mcpServerUrl">
+): unknown[] {
+  const plugins: unknown[] = [];
+  const hasTools = (req.toolPlugins ?? []).length > 0;
+  if (req.mcpServerUrl) {
+    plugins.push({
+      Id: "mcp-gateway",
+      Source: "MCPServer",
+      Description: "MCP Gateway tools",
+      Transport: "mcp",
+      TransportUrl: req.mcpServerUrl,
+      TransportProtocol:
+        "https://copilot.microsoft.com/schemas/plugins/local/transport/1.0",
+    });
+  }
+  for (const t of req.toolPlugins ?? []) {
+    plugins.push({
+      Id: t.name,
+      Source: "API",
+      Description: t.description ?? "",
+      Parameters: t.parameters ?? {},
+    });
+  }
+  if (plugins.length === 0) {
+    plugins.push({ Id: "BingWebSearch", Source: "BuiltIn" });
+  }
+  void hasTools;
+  return plugins;
 }
 
 export interface ChatResult {
@@ -70,9 +114,9 @@ export function buildWSURL(acc: ChatAccount, sessionID: string, conversationID: 
   q.set("source", `"officeweb"`);
   q.set("product", "Office");
   q.set("agentHost", "Bizchat.FullScreen");
-  q.set("licenseType", "Starter");
+  q.set("licenseType", acc.licenseType || "Starter");
   q.set("agent", "web");
-  q.set("scenario", "OfficeWebIncludedCopilot");
+  q.set("scenario", acc.scenario || "OfficeWebIncludedCopilot");
   return `${WS_BASE}/${acc.oid}@${acc.tid}?${q.toString()}`;
 }
 
@@ -85,7 +129,8 @@ export function chatPayload(
   requestID: string,
   tone: string,
   firstTurn: boolean,
-  attachments: Attachment[] = []
+  attachments: Attachment[] = [],
+  chatOpts?: Pick<ChatRequest, "toolPlugins" | "mcpServerUrl" | "featureFlags">
 ): string {
   const uploaded = attachments.filter((a) => a.type === "image" && a.docId);
   const message: Record<string, unknown> = {
@@ -139,13 +184,17 @@ export function chatPayload(
     "flux_v3_gptv_enable_upload_multi_image_in_turn_wo_ch",
     "gptvnorm2048",
     "cwc_fileupload_odb",
-    "update_memory_plugin",
-    "add_custom_instructions",
     "cwc_flux_v3",
     "flux_v3_progress_messages",
     "enable_batch_token_processing",
     "enable_gg_gpt",
   ];
+  // memoryV2 flag (feature_flags.go): gates the memory optionsSets. Enabled
+  // by default — matching the historical always-on payload.
+  if (chatOpts?.featureFlags?.memoryV2 !== false) {
+    optionsSets.push("update_memory_plugin", "add_custom_instructions");
+  }
+  const plugins = chatOpts ? buildChatPlugins(chatOpts) : [{ Id: "BingWebSearch", Source: "BuiltIn" }];
   const chat = {
     arguments: [
       {
@@ -175,7 +224,7 @@ export function chatPayload(
         tone,
         streamingMode: "ConciseWithPadding",
         message,
-        plugins: [],
+        plugins,
       },
     ],
     invocationId: "0",

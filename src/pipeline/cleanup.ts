@@ -12,16 +12,29 @@ export interface CleanupEnvConfig {
   enabled: boolean;
   maxAgeMs: number;
   keepN: number;
+  // conversation_manager.go modes mapped onto the cron sweep:
+  //   after_response -> age + keepN (cron approximation of per-turn clearing)
+  //   keep_n         -> only keepN newest survive
+  //   max_age        -> only age-based deletion
+  mode: "after_response" | "keep_n" | "max_age";
 }
 
 export function cleanupConfig(env: Env): CleanupEnvConfig {
   const flag = (env as unknown as Record<string, string | undefined>)["M365_AUTO_CLEANUP"];
   const disabled = ["0", "false", "no", "off"].includes((flag ?? "").trim().toLowerCase());
   const hours = numVar(env, "M365_AUTO_CLEANUP_MAX_AGE_HOURS", 2);
+  const modeRaw = ((env as unknown as Record<string, string | undefined>)["M365_CLEANUP_MODE"] ?? "")
+    .trim()
+    .toLowerCase();
+  const mode =
+    modeRaw === "keep_n" || modeRaw === "max_age" || modeRaw === "after_response"
+      ? modeRaw
+      : ("after_response" as const);
   return {
     enabled: !disabled,
     maxAgeMs: Math.max(1, hours) * 3600_000,
     keepN: numVar(env, "M365_AUTO_CLEANUP_KEEP_N", 5),
+    mode,
   };
 }
 
@@ -42,12 +55,19 @@ async function activeConversationSet(env: Env, windowMs: number): Promise<Set<st
   for (const conv of await listConversations(env)) {
     if (Date.parse(conv.updatedAt) > cutoff) active.add(conv.id);
   }
+  // Whitelisted conversations are never recycled (conversation_manager.go).
+  const { whitelistIDs, activeUserConversations } = await import("../admin/extras");
+  for (const id of await whitelistIDs(env)) active.add(id);
+  for (const id of await activeUserConversations(env)) active.add(id);
   return active;
 }
 
 async function dropConversation(env: Env, conversationId: string): Promise<void> {
   await deleteLocalConversation(env, conversationId);
   await unbindByConversation(env, conversationId);
+  // The viewer transcript dies with its conversation.
+  const { deleteByConversation } = await import("../store/chatMessages");
+  await deleteByConversation(env, conversationId);
 }
 
 export async function autoCleanupOnce(
@@ -75,6 +95,7 @@ export async function autoCleanupOnce(
     }
     if (chats.length === 0) break;
 
+    const useAge = config.mode === "after_response" || config.mode === "max_age";
     const stale: { id: string; createMs: number }[] = [];
     const rest: { id: string; createMs: number }[] = [];
     for (const chat of chats) {
@@ -82,34 +103,38 @@ export async function autoCleanupOnce(
       if (!convId || active.has(convId)) continue;
       const createMs = chat["createTimeUtc"];
       if (typeof createMs !== "number") continue; // never guess for fresh chats
-      if (nowMs - createMs > config.maxAgeMs) stale.push({ id: convId, createMs });
+      if (useAge && nowMs - createMs > config.maxAgeMs) stale.push({ id: convId, createMs });
       else rest.push({ id: convId, createMs });
     }
 
     let anyDeleted = false;
-    for (const c of stale) {
-      if (deleteBudget <= 0) return { deleted, skipped: "delete budget exhausted" };
-      try {
-        await client.deleteConversation(c.id);
-        await dropConversation(env, c.id);
-        deleted++;
-        anyDeleted = true;
-        deleteBudget--;
-      } catch (e) {
-        console.error(`[auto-cleanup] delete ${c.id} failed:`, e);
+    if (useAge) {
+      for (const c of stale) {
+        if (deleteBudget <= 0) return { deleted, skipped: "delete budget exhausted" };
+        try {
+          await client.deleteConversation(c.id);
+          await dropConversation(env, c.id);
+          deleted++;
+          anyDeleted = true;
+          deleteBudget--;
+        } catch (e) {
+          console.error(`[auto-cleanup] delete ${c.id} failed:`, e);
+        }
       }
     }
-    rest.sort((a, b) => a.createMs - b.createMs);
-    for (let i = config.keepN; i < rest.length; i++) {
-      if (deleteBudget <= 0) return { deleted, skipped: "delete budget exhausted" };
-      try {
-        await client.deleteConversation(rest[i].id);
-        await dropConversation(env, rest[i].id);
-        deleted++;
-        anyDeleted = true;
-        deleteBudget--;
-      } catch (e) {
-        console.error(`[auto-cleanup] delete ${rest[i].id} failed:`, e);
+    if (config.mode !== "max_age") {
+      rest.sort((a, b) => a.createMs - b.createMs);
+      for (let i = config.keepN; i < rest.length; i++) {
+        if (deleteBudget <= 0) return { deleted, skipped: "delete budget exhausted" };
+        try {
+          await client.deleteConversation(rest[i].id);
+          await dropConversation(env, rest[i].id);
+          deleted++;
+          anyDeleted = true;
+          deleteBudget--;
+        } catch (e) {
+          console.error(`[auto-cleanup] delete ${rest[i].id} failed:`, e);
+        }
       }
     }
     if (!anyDeleted) break;

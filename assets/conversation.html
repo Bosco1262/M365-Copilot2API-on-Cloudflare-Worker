@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>对话详情 - M365 Copilot2API</title>
+<title>Conversation - M365 Copilot2API</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -89,8 +89,9 @@ window.I18N_DICT={
   "conv.untitled":"Untitled conversation",
   "conv.noMessages":"No messages yet",
   "conv.missingId":"Missing session ID",
-  "conv.loadFailed":"Load failed"
- },
+   "conv.loadFailed":"Load failed",
+   "conv.docTitle":"Conversation - M365 Copilot2API"
+  },
  "zh-CN":{
   "conv.back":"返回",
   "conv.view":"视图",
@@ -117,8 +118,9 @@ window.I18N_DICT={
   "conv.untitled":"未命名对话",
   "conv.noMessages":"暂无消息",
   "conv.missingId":"缺少会话 ID",
-  "conv.loadFailed":"加载失败"
- }
+   "conv.loadFailed":"加载失败",
+   "conv.docTitle":"对话详情 - M365 Copilot2API"
+  }
 };
 /*@I18N-END*/</script>
 <script src="/vendor/i18n.js"></script>
@@ -249,6 +251,10 @@ function showError(message){$('loading').hidden=true;$('conversationView').hidde
 function setView(view){state.view=view==='json'?'json':'conversation';$('conversationTab').classList.toggle('active',state.view==='conversation');$('jsonTab').classList.toggle('active',state.view==='json');if(state.data){$('conversationView').hidden=state.view!=='conversation';$('jsonView').hidden=state.view!=='json';}}
 async function copyJSON(){if(!state.data)return;try{await navigator.clipboard.writeText(JSON.stringify(state.data,null,2));}catch(_){}}
 function goBack(){if(history.length>1)history.back();else location.href='/?page=conversations';}
+
+function applyDocTitle(){document.title=I18N.t('conv.docTitle');}
+applyDocTitle();
+document.addEventListener('i18n:locale',applyDocTitle);
 
 /* language selector (shared runtime) */
 (function(){

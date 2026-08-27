@@ -39,6 +39,7 @@ import { chat as chathubChat } from "../chathub/client";
 import type { Attachment } from "../chathub/protocol";
 import {
   adaptiveToolCallLimit,
+  allowedToolNames,
   buildToolResponse,
   fencedToolCalls,
   isContentPolicyBlock,
@@ -52,11 +53,19 @@ import {
   type DetectedToolCall,
 } from "../pipeline/tools";
 import {
+  buildAgentLedger,
+  COMPLETION_DISCLAIMER,
+  completionEvidenceAllows,
+  ledgerCanContinue,
+  ledgerRouterContext,
+} from "../pipeline/ledger";
+import {
   describeUpstream,
   isAuthFailure,
   isRateLimited,
   isEmptyCompletion,
 } from "../errors";
+import { coordAcquireAccount, coordReleaseAccount } from "../do/coordination";
 import { sseHeaders } from "./sse";
 import { createTextHoldback } from "./holdback";
 import {
@@ -98,6 +107,19 @@ export interface OaiReqBody {
 function pickStr(...vals: (string | undefined)[]): string {
   for (const v of vals) if (v && v.trim() !== "") return v.trim();
   return "";
+}
+
+// True when the request transcript carries function-calling rows (assistant
+// tool_calls or tool results). Gateway-derived conversation reuse (convCache /
+// resolver / user binding) is disabled for these requests: sending only the
+// incremental tail — which is then just tool metadata — to the existing cloud
+// conversation regularly stalls M365 into empty/stalled completions, which
+// clients observe as errors/timeouts right after the first tool round.
+function hasToolHistory(messages: OaiMsg[]): boolean {
+  return messages.some((m) => {
+    const role = (m.role ?? "").trim().toLowerCase();
+    return role === "tool" || (Array.isArray(m.tool_calls) && m.tool_calls.length > 0);
+  });
 }
 
 function normalizeTools(body: OaiReqBody): { maps: Record<string, unknown>[]; choice: unknown } {
@@ -193,6 +215,14 @@ export interface PreparedRequest {
   cloudSessionID: string;
   accountID: string;
   resolvedConversationID: string;
+  // body.user fixed binding (sessions.go userSessions port)
+  user?: string;
+  apiKeyHash?: string;
+  // native planning / MCP gateway advertisement
+  toolPlugins?: { name: string; description?: string; parameters?: unknown }[];
+  mcpServerUrl?: string;
+  // convCache bucket (conv_cache.go port): set when a lookup was attempted.
+  convCache?: { key: string; sysHash: string };
 }
 
 export async function prepareCore(
@@ -230,6 +260,10 @@ export async function prepareCore(
   let conversationID = pickStr(rawBody.conversation_id, rawBody.conversationId);
   let cloudSessionID = pickStr(rawBody.session_id, rawBody.sessionId);
 
+  // Tool-bearing requests never reuse gateway-derived conversations (see
+  // hasToolHistory) — computed early so every reuse path below can check it.
+  const toolHistory = hasToolHistory(messages);
+
   if (sessionKey) {
     const binding = await getSessionBinding(ctx.env, sessionKey);
     if (binding) {
@@ -239,9 +273,58 @@ export async function prepareCore(
     }
   }
 
+  // body.user fixed account+conversation binding (userSessions port).
+  const rawUser = typeof (rawBody as Record<string, unknown>)["user"] === "string"
+    ? String((rawBody as Record<string, unknown>)["user"])
+    : "";
+  let apiKeyHash = "";
+  {
+    const auth = ctx.req.headers.get("authorization") ?? "";
+    const xk = ctx.req.headers.get("x-api-key") ?? "";
+    const rawKey = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : xk.trim();
+    if (rawKey !== "") {
+      const { keyHash } = await import("../store/keys");
+      apiKeyHash = await keyHash(rawKey);
+      if (rawUser !== "" && !conversationID && !toolHistory) {
+        const { getUserSession } = await import("../admin/extras");
+        const us = await getUserSession(ctx.env, apiKeyHash, rawUser);
+        if (us) {
+          conversationID = conversationID || us.conversationId;
+          cloudSessionID = cloudSessionID || us.sessionId;
+          accountID = accountID || us.accountId;
+        }
+      }
+    }
+  }
+
   let answerPrompt = prompt;
   let resolvedConversationID = "";
-  if (!conversationID && messages.length > 0) {
+
+  // convCache hit (#3): same API key + account bucket + model + system-prompt
+  // hash and MORE messages than cached -> continue the cached conversation
+  // incrementally instead of rebuilding context. Skipped for tool-bearing
+  // requests (see hasToolHistory) — their incremental tail is tool metadata
+  // that M365 cannot answer on its own.
+  let convCache: { key: string; sysHash: string } | undefined;
+  if (!conversationID && !toolHistory && messages.length > 0) {
+    const { computeSysHash, convCacheKeyFor, getConvCache } = await import("../store/convCache");
+    const sysHash = await computeSysHash(messages);
+    if (sysHash !== "") {
+      const key = convCacheKeyFor(apiKeyHash, accountID, rawBody.model || DEFAULT_MODEL);
+      convCache = { key, sysHash };
+      const hit = await getConvCache(ctx.env, key);
+      if (hit && hit.sysHash === sysHash && messages.length > hit.messageCount) {
+        conversationID = hit.conversationId;
+        cloudSessionID = pickStr(cloudSessionID, hit.sessionId);
+        accountID = pickStr(accountID, hit.accountId);
+        const inc = await flattenPromptMessages(messages.slice(hit.messageCount));
+        const incPrompt = inc.prompt.trim();
+        if (incPrompt !== "") answerPrompt = incPrompt;
+      }
+    }
+  }
+
+  if (!conversationID && !toolHistory && messages.length > 0) {
     const ip =
       ctx.req.headers.get("CF-Connecting-IP") ??
       ctx.req.headers.get("X-Forwarded-For")?.split(",")[0].trim() ??
@@ -268,6 +351,58 @@ export async function prepareCore(
     }
   }
 
+  // MCP gateway: advertise request tools + our own SSE endpoint to the cloud.
+  let toolPlugins: { name: string; description?: string; parameters?: unknown }[] | undefined;
+  let mcpServerUrl: string | undefined;
+  if (settings.mcpServers && settings.mcpServers.length > 0) {
+    // External server bridge (#19): merge their tools into the registry so
+    // the cloud can discover them via /v1/mcp/tools (5min cache per URL).
+    try {
+      const { syncOutboundTools } = await import("../mcp/outbound");
+      await syncOutboundTools(settings.mcpServers);
+    } catch {
+      /* bridging must never break the request path */
+    }
+  }
+  const rawTools = Array.isArray((rawBody as Record<string, unknown>)["tools"])
+    ? ((rawBody as Record<string, unknown>)["tools"] as Record<string, unknown>[])
+    : [];
+  if (rawTools.length > 0) {
+    toolPlugins = [];
+    for (const t of rawTools) {
+      const fn = (t["function"] ?? t) as Record<string, unknown>;
+      const name = typeof fn["name"] === "string" ? fn["name"] : "";
+      if (name === "") continue;
+      toolPlugins.push({
+        name,
+        description: typeof fn["description"] === "string" ? fn["description"] : undefined,
+        parameters: fn["parameters"],
+      });
+    }
+    if (toolPlugins.length > 0) {
+      try {
+        const { globalToolRegistry } = await import("../mcp/server");
+        globalToolRegistry.mergeTools(toolPlugins);
+        mcpServerUrl = `${ctx.url.origin}/v1/mcp/sse`;
+      } catch {}
+    } else {
+      toolPlugins = undefined;
+    }
+  }
+
+  // Answer-turn tool protocol: appended AFTER incremental slicing so the
+  // invocation instructions are always present regardless of how much history
+  // was elided. Skipped when tool_choice disables calling entirely. This is
+  // what lets the model emit fenced invocations that the streaming path (which
+  // never runs the router pre-call) can convert into tool_calls.
+  if (
+    toolMaps.length > 0 &&
+    !(typeof toolChoice === "string" && toolChoice === "none")
+  ) {
+    const { toolUseInstructions } = await import("../pipeline/tools");
+    answerPrompt += toolUseInstructions(toolMaps);
+  }
+
   return {
     ok: true,
     prepared: {
@@ -283,14 +418,29 @@ export async function prepareCore(
       cloudSessionID,
       accountID,
       resolvedConversationID,
+      user: rawUser || undefined,
+      apiKeyHash: apiKeyHash || undefined,
+      toolPlugins,
+      mcpServerUrl,
+      convCache,
     },
   };
+}
+
+export interface AccountResolution {
+  ok: boolean;
+  error?: Response;
+  acc?: AccountToken;
+  // Present when a per-account concurrency slot was taken via the
+  // coordination DO (#11 executor); callers MUST invoke it once the upstream
+  // work for this request has finished.
+  release?: () => Promise<void>;
 }
 
 export async function resolveAndValidateAccount(
   ctx: HandlerCtx,
   prepared: PreparedRequest
-): Promise<{ ok: false; error: Response } | { ok: true; acc: AccountToken }> {
+): Promise<{ ok: false; error: Response } | { ok: true; acc: AccountToken; release?: () => Promise<void> }> {
   let acc: AccountToken;
   try {
     acc = await resolveAccount(ctx.env, prepared.accountID);
@@ -312,7 +462,52 @@ export async function resolveAndValidateAccount(
       ),
     };
   }
-  return { ok: true, acc };
+  return await acquireAccountSlot(ctx, acc);
+}
+// Per-account concurrency gate (port of account_concurrency.go). Only active
+// when the coordination DO is bound; the limit comes from runtime settings.
+async function acquireAccountSlot(
+  ctx: HandlerCtx,
+  acc: AccountToken
+): Promise<
+  | { ok: true; acc: AccountToken; release?: () => Promise<void> }
+  | { ok: false; error: Response }
+> {
+  try {
+    const settings = await getSettings(ctx.env);
+    const slot = await coordAcquireAccount(ctx.env, acc.id, settings.accountConcurrencyLimit);
+    if (!slot) return { ok: true, acc }; // unbound / stub failure -> no gating
+    if (!slot.acquired) {
+      // Natural backpressure semantics like upstream's limiter.
+      const retrySec = Math.max(1, Math.ceil((slot.retryAfterMs ?? 1000) / 1000));
+      return {
+        ok: false,
+        error: jsonOut(
+          {
+            error: {
+              message: `account ${acc.id} is at its concurrency limit (${settings.accountConcurrencyLimit}); retry later`,
+              type: "rate_limit_error",
+            },
+          },
+          429,
+          { "Retry-After": String(retrySec) }
+        ),
+      };
+    }
+    const holder = slot.holder ?? "";
+    let released = false;
+    return {
+      ok: true,
+      acc,
+      release: async () => {
+        if (released || holder === "") return;
+        released = true;
+        await coordReleaseAccount(ctx.env, acc.id, holder);
+      },
+    };
+  } catch {
+    return { ok: true, acc }; // gating must never break request flow
+  }
 }
 
 export async function chatCall(
@@ -328,13 +523,16 @@ export async function chatCall(
 ): Promise<ChatOutcome> {
   const settings = await getSettings(ctx.env);
   return chathubChat(
-    { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "" },
+    { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "", licenseType: settings.licenseType, scenario: settings.scenario },
     {
       text: opts.textOverride ?? prepared.answerPrompt,
       tone: opts.toneOverride ?? prepared.tone,
       conversationId: prepared.conversationID || undefined,
       sessionId: prepared.cloudSessionID || undefined,
       attachments: prepared.attachments,
+      toolPlugins: prepared.toolPlugins,
+      mcpServerUrl: prepared.mcpServerUrl,
+      featureFlags: { memoryV2: settings.featureFlags?.memoryV2 !== false },
     },
     { onDelta: opts.onDelta, onReasoning: opts.onReasoning },
     { timeoutMs: settings.chatTimeoutSeconds * 1000 }
@@ -395,6 +593,38 @@ export async function recordFinalize(
       createdAt: nowIso(),
       updatedAt: nowIso(),
     });
+    // Conversation detail viewer transcript (batch C): capture the current
+    // turn's user prompt + assistant answer. Router planning turns are
+    // skipped — their prompt/answer are synthetic tool-selection traffic.
+    if (opts.sentPrompt === prepared.answerPrompt) {
+      try {
+        const { appendChatTurn } = await import("../store/chatMessages");
+        let lastUser = "";
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if ((messages[i].role ?? "").toLowerCase() === "user") {
+            lastUser = contentToString(messages[i].content);
+            break;
+          }
+        }
+        await appendChatTurn(ctx.env, res.conversationId, lastUser, res.text);
+      } catch (e) {
+        console.warn("[chat-messages] transcript append failed:", e instanceof Error ? e.message : e);
+      }
+      // convCache write-back (#3): remember this conversation for the
+      // key+account+model bucket so the next turn with more messages can be
+      // sent incrementally.
+      if (prepared.convCache) {
+        const { putConvCache } = await import("../store/convCache");
+        await putConvCache(ctx.env, prepared.convCache.key, {
+          accountId: acc.id,
+          conversationId: res.conversationId,
+          sessionId: res.sessionId,
+          messageCount: messages.length,
+          sysHash: prepared.convCache.sysHash,
+          lastUsedAt: nowIso(),
+        });
+      }
+    }
   }
   if (prepared.sessionKey) {
     await upsertSessionBinding(ctx.env, {
@@ -405,6 +635,17 @@ export async function recordFinalize(
       title: prepared.prompt.slice(0, 80),
       updatedAt: nowIso(),
     });
+  }
+  if (prepared.user && prepared.apiKeyHash && res.conversationId !== "") {
+    const { putUserSession } = await import("../admin/extras");
+    await putUserSession(
+      ctx.env,
+      prepared.apiKeyHash,
+      prepared.user,
+      res.conversationId,
+      res.sessionId,
+      acc.id
+    );
   }
   let historyTokens = 0;
   const upper = Math.max(0, messages.length - 1);
@@ -448,19 +689,28 @@ export async function runCompletionsCore(
   const settings = await getSettings(ctx.env);
   const canFailover = (): boolean =>
     !prepared.accountID && !prepared.conversationID;
+  // Agent evidence ledger: rebuilt from the request messages on every call
+  // (no server-side state). Only meaningful when tools are declared.
+  const ledger =
+    prepared.toolMaps.length > 0 ? buildAgentLedger(prepared.messages) : null;
 
   try {
     // --- Router planning mode: ask the model to pick the next tool first ---
+    // Runs on EVERY tool round (the answer prompt carries no tool-use
+    // instructions, so without the router nothing converts replies into
+    // tool_calls). The stall risk is bounded elsewhere: tool-bearing requests
+    // always send the full transcript (see hasToolHistory) and the ledger
+    // block is size-capped in ledgerRouterContext.
     if (
       settings.toolPlanningMode === "router" &&
       prepared.toolMaps.length > 0 &&
-      normalizedChoice(prepared.toolChoice) !== "none"
+      normalizedChoice(prepared.toolChoice) !== "none" &&
+      (!ledger || ledgerCanContinue(ledger, settings.maxToolRounds).ok)
     ) {
-      const routePrompt = modelToolRouterPrompt(
-        prepared.answerPrompt,
-        prepared.toolMaps,
-        prepared.toolChoice
-      );
+      const ledgerBlock = ledger ? ledgerRouterContext(ledger) : "";
+      const routePrompt =
+        modelToolRouterPrompt(prepared.answerPrompt, prepared.toolMaps, prepared.toolChoice) +
+        (ledgerBlock !== "" ? `\n\n${ledgerBlock}` : "");
       let routeRes: ChatOutcome;
       try {
         routeRes = await chatCall(ctx, prepared, acc, { textOverride: routePrompt });
@@ -564,16 +814,24 @@ export async function runCompletionsCore(
       if (validated.valid.length > 0) {
         toolCalls = validated.valid;
       } else {
-        const nativeRaw = nativeToolCalls(
-          res.events,
-          prepared.toolMaps.map((t) => ({ name: String((t["function"] as Record<string, unknown>)?.["name"] ?? "") }))
-        );
+        const nativeRaw = nativeToolCalls(res.events, allowedToolNames(prepared.toolMaps));
         const nv = validateDetectedToolCalls(nativeRaw, prepared.toolMaps, prepared.toolChoice);
         toolCalls = nv.valid;
       }
     }
 
+    // Completion evidence gate: an answer that contradicts the ledger (claims
+    // success with no tool evidence, disowns recorded evidence, or leaves
+    // pending calls) is replaced with a fixed disclaimer.
     let text = res.text;
+    if (ledger && toolCalls.length === 0 && !completionEvidenceAllows(text, ledger)) {
+      console.error("[chat] completion evidence gate:", JSON.stringify({
+        pending: ledger.pending.length,
+        completed: ledger.completed.length,
+      }));
+      text = COMPLETION_DISCLAIMER;
+      res.text = text;
+    }
     const rf = rawBody.response_format;
     if ((rf?.type === "json_object" || rf?.type === "json_schema") && toolCalls.length === 0) {
       text = normalizeJSONText(text);
@@ -608,6 +866,9 @@ export async function runCompletionsCore(
   } catch (err) {
     await markFailure(ctx.env, acc.id, err);
     return { ok: false, error: writeUpstreamError(err) };
+  } finally {
+    // Free the per-account concurrency slot (no-op when ungated).
+    await accRes.release?.();
   }
 }
 
@@ -695,6 +956,7 @@ async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): Promise
   const settings = await getSettings(ctx.env);
   const canFailover = (): boolean => !prepared.accountID && !prepared.conversationID;
   const hasTools = prepared.toolMaps.length > 0;
+  const declaredNames = hasTools ? allowedToolNames(prepared.toolMaps) : new Set<string>();
   const sendUsage = body.stream_options?.include_usage !== false;
 
   const { readable, writable } = new TransformStream<Uint8Array>();
@@ -704,6 +966,7 @@ async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): Promise
   const id = "chatcmpl-" + uuid();
   const model = body.model || DEFAULT_MODEL;
   let firstDelta = true;
+  const releaseAcc = accRes.release;
 
   const work = (async () => {
     try {
@@ -736,13 +999,16 @@ async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): Promise
       let res: ChatOutcome;
       try {
         res = await chathubChat(
-          { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "" },
+          { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "", licenseType: settings.licenseType, scenario: settings.scenario },
           {
             text: prepared.answerPrompt,
             tone: prepared.tone,
             conversationId: prepared.conversationID || undefined,
             sessionId: prepared.cloudSessionID || undefined,
             attachments: prepared.attachments,
+            toolPlugins: prepared.toolPlugins,
+            mcpServerUrl: prepared.mcpServerUrl,
+            featureFlags: { memoryV2: settings.featureFlags?.memoryV2 !== false },
           },
           {
             onDelta: (p) => emitTextHoldback(p),
@@ -766,11 +1032,18 @@ async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): Promise
       }
       await markSuccess(ctx.env, acc.id);
 
-      // Post-stream tool detection over the full accumulated text.
+      // Post-stream tool detection: fenced blocks first, then native events.
       if (hasTools) {
         const detectSource = holdback.totalText() || res.text;
         const raw = fencedToolCalls(detectSource, prepared.toolMaps, prepared.toolChoice);
-        const { valid } = validateDetectedToolCalls(raw, prepared.toolMaps, prepared.toolChoice);
+        let { valid } = validateDetectedToolCalls(raw, prepared.toolMaps, prepared.toolChoice);
+        if (valid.length === 0) {
+          // Native event path: invocations observed in ChatHub frames become
+          // tool_calls — they are only collected here, never emitted as text.
+          const nativeRaw = nativeToolCalls(res.events, declaredNames);
+          const nv = validateDetectedToolCalls(nativeRaw, prepared.toolMaps, prepared.toolChoice);
+          valid = nv.valid;
+        }
         if (valid.length > 0) {
           const calls = limitToolCalls(valid, adaptiveToolCallLimit(valid, settings.maxToolCallsPerTurn));
           const toolResponse = buildToolResponse(id, model, true, sendUsage, calls, res);
@@ -792,11 +1065,13 @@ async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): Promise
           );
           return;
         }
-        // Not a tool call — flush the held-back tail as normal content.
-        holdback.flush((t) => {
-          if (t !== "") writeChunk({ content: t });
-        });
       }
+      // No tool call materialised — flush whatever is still held back. The
+      // holdback ALWAYS retains the last few runes (fence-split guard), so
+      // this must run for plain conversations too or their tail never ships.
+      holdback.flush((t) => {
+        if (t !== "") writeChunk({ content: t });
+      });
 
       const pt = estimateTokens(prepared.answerPrompt);
       const ct = estimateTokens(res.text);
@@ -832,6 +1107,8 @@ async function streamChatCompletions(ctx: HandlerCtx, body: OaiReqBody): Promise
       );
       raw("data: [DONE]\n\n");
       await writer.close();
+    } finally {
+      await releaseAcc?.();
     }
   })();
   ctx.waitUntil(work);

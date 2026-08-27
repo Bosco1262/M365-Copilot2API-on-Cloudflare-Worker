@@ -4,6 +4,17 @@ export interface Env {
   "m365-copilot2api_KV": KVNamespace;
   ASSETS: Fetcher;
 
+  // Optional D1 binding: when present, usage events and debug records are
+  // stored in D1 instead of KV (see migrations/0001_init.sql).
+  DB?: D1DatabaseLite;
+  // Optional DO binding for MCP cross-isolate sessions.
+  MCP_HUB?: DurableObjectNamespaceLite;
+  // Optional DO binding for global coordination (login lockout, account
+  // round-robin cursor, per-account concurrency semaphore, refresh mutex).
+  // When unbound every consumer falls back to the previous isolate-local
+  // behavior.
+  COORD?: DurableObjectNamespaceLite;
+
   // secrets / vars (all optional)
   ADMIN_PASSWORD?: string;
   M365_BROWSER_CLIENT_ID?: string;
@@ -22,6 +33,35 @@ export interface Env {
 }
 
 export const DEFAULT_ADMIN_PASSWORD = "admin123";
+
+// Minimal structural types so the app compiles without pulling the full
+// workers-types definitions for D1/DO (runtime objects are richer).
+export interface D1PreparedStatementLite {
+  bind(...values: (string | number | null | boolean)[]): D1PreparedStatementLite;
+  run(): Promise<unknown>;
+  all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+}
+export interface D1DatabaseLite {
+  prepare(query: string): D1PreparedStatementLite;
+  batch(statements: D1PreparedStatementLite[]): Promise<unknown>;
+}
+export interface DurableObjectNamespaceLite {
+  idFromName(name: string): { toString(): string };
+  get(id: { toString(): string }): {
+    fetch(input: RequestInfo | string, init?: RequestInit): Promise<Response>;
+  };
+}
+export interface DurableObjectStorageLite {
+  get<T = unknown>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  setAlarm(scheduledTime: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
+}
+export interface DurableObjectStateLite {
+  storage: DurableObjectStorageLite;
+}
 
 // Office web Copilot first-party client (verified working with ChatHub via
 // browser PKCE), mirrored from internal/auth/config.go.
@@ -61,4 +101,30 @@ export function oauthConfig(env: Env) {
     tokenEndpoint: `${authority}/oauth2/v2.0/token`,
     deviceCodeEndpoint: `${authority}/oauth2/v2.0/devicecode`,
   };
+}
+
+// Settings-saved OAuth fields take priority over deploy-time bindings
+// (port of ApplyStartupSettingsEnv semantics, evaluated lazily per request).
+export async function effectiveOAuthConfig(env: Env): Promise<ReturnType<typeof oauthConfig>> {
+  const base = oauthConfig(env);
+  try {
+    const { getSettings } = await import("./store/settings");
+    const s = await getSettings(env);
+    const over = (v: string, fb: string) => (v && v.trim() !== "" ? v.trim() : fb);
+    const clientId = over(s.clientId, base.clientId);
+    const authority = over(s.authority, base.authority);
+    const redirectUri = over(s.redirectUri, base.redirectUri);
+    const scope = over(s.scope, base.scope);
+    return {
+      ...base,
+      clientId,
+      authority,
+      redirectUri,
+      scope,
+      authorizeEndpoint: `${authority}/oauth2/v2.0/authorize`,
+      tokenEndpoint: `${authority}/oauth2/v2.0/token`,
+    };
+  } catch {
+    return base;
+  }
 }

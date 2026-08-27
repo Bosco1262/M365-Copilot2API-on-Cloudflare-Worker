@@ -147,3 +147,31 @@ export async function firstAccountCloudClient(env: Env): Promise<M365CloudClient
   if (!acc.tid || !acc.refreshToken) return null;
   return new M365CloudClient(clientId, acc.tid, acc.refreshToken);
 }
+
+// Resilient variant for read paths: try each account until one succeeds, so a
+// single stale first account cannot take down conversation listing.
+export async function listConversationsResilient(
+  env: Env
+): Promise<{ chats?: Record<string, unknown>[]; error?: Error }> {
+  const { listAccounts } = await import("../store/accounts");
+  const accounts = await listAccounts(env);
+  let lastError: Error | undefined;
+  let attempted = 0;
+  for (const acc of accounts.slice(0, 3)) {
+    if (!acc.tid || !acc.refreshToken || acc.status === "disabled") continue;
+    const clientId = env.M365_CLIENT_ID?.trim() || acc.clientId || oauthConfig(env).clientId;
+    const client = new M365CloudClient(clientId, acc.tid, acc.refreshToken);
+    try {
+      const chats = await client.listConversations();
+      return { chats };
+    } catch (e) {
+      attempted++;
+      lastError = e instanceof Error ? e : new Error(String(e));
+      console.error(`[m365cloud] list via account ${acc.id} failed:`, lastError.message);
+    }
+  }
+  if (accounts.length > 0 && attempted === 0 && !lastError) {
+    return { error: new Error("no eligible account (missing tid/refreshToken or disabled)") };
+  }
+  return { error: lastError };
+}

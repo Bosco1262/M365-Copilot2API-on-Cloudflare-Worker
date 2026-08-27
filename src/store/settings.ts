@@ -10,6 +10,22 @@ export interface ModelMapping {
   defaultReasoningLevel: string;
 }
 
+// Port of the upstream M365_ENABLE_* feature-flag knobs (feature_flags.go).
+// Only memoryV2 has a verified payload effect today (gates the
+// update_memory_plugin / add_custom_instructions optionsSets); the rest are
+// stored so console/env configuration survives, but remain inert until each
+// flag's upstream payload effect is individually verified.
+export interface FeatureFlags {
+  memoryV2: boolean;
+  deepWork: boolean;
+  computerUse: boolean;
+  realtimeVoice: boolean;
+  systemPromptOverride: boolean;
+  designerImageGen4o: boolean;
+  codeCanvas: boolean;
+  sydneyReconnect: boolean;
+}
+
 export interface RuntimeSettings {
   maxToolCallsPerTurn: number;
   maxToolRounds: number;
@@ -29,7 +45,19 @@ export interface RuntimeSettings {
   scope: string;
   modelMappings: ModelMapping[];
   discoveredTones: string[];
+  // Last successful manual/cron tone sync (ISO). Drives the 24h auto-resync.
+  discoveredTonesAt: string;
   toolPlanningMode: string;
+  // ChatHub identity fields (upstream: settings.go LicenseType/Scenario enums)
+  licenseType: string;
+  scenario: string;
+  // Per-account concurrency cap (upstream account_concurrency default 8).
+  // Enforcement lands with the Coordination DO; stored now for parity.
+  accountConcurrencyLimit: number;
+  // Optional external MCP servers bridged into the global tool registry.
+  mcpServers?: string[];
+  // Feature-flag knobs (env-seeded; see FeatureFlags).
+  featureFlags?: Partial<FeatureFlags>;
 }
 
 // Default mappings seed the console's editable model table. The mapping
@@ -89,6 +117,28 @@ function envInt(v: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envBool(v: string | undefined, fallback: boolean): boolean {
+  const t = (v ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(t)) return true;
+  if (["0", "false", "no", "off"].includes(t)) return false;
+  return fallback;
+}
+
+function envFeatureFlags(env: Env): Partial<FeatureFlags> {
+  const g = (name: string, fb: boolean): boolean =>
+    envBool((env as unknown as Record<string, string | undefined>)[name], fb);
+  return {
+    memoryV2: g("M365_ENABLE_MEMORY_V2", true),
+    deepWork: g("M365_ENABLE_DEEP_WORK", false),
+    computerUse: g("M365_ENABLE_COMPUTER_USE", false),
+    realtimeVoice: g("M365_ENABLE_REALTIME_VOICE", false),
+    systemPromptOverride: g("M365_ENABLE_SYSTEM_PROMPT_OVERRIDE", false),
+    designerImageGen4o: g("M365_ENABLE_DESIGNER_IMAGE_GEN_4O", false),
+    codeCanvas: g("M365_ENABLE_CODE_CANVAS", false),
+    sydneyReconnect: g("M365_ENABLE_SYDNEY_RECONNECT", false),
+  };
+}
+
 export function defaultSettings(env: Env): RuntimeSettings {
   return {
     maxToolCallsPerTurn: 32,
@@ -109,7 +159,13 @@ export function defaultSettings(env: Env): RuntimeSettings {
     scope: "",
     modelMappings: [...DEFAULT_MODEL_MAPPINGS],
     discoveredTones: [],
+    discoveredTonesAt: "",
     toolPlanningMode: "router",
+    licenseType: "Starter",
+    scenario: "OfficeWebIncludedCopilot",
+    accountConcurrencyLimit: 8,
+    mcpServers: [],
+    featureFlags: envFeatureFlags(env),
   };
 }
 
@@ -138,6 +194,8 @@ export function validateSettings(v: RuntimeSettings): string | null {
   if (v.maxOutputTokens < 1 || v.maxOutputTokens >= v.contextWindow)
     return "最大输出必须大于 0 且小于上下文窗口";
   if (v.chatTimeoutSeconds < 5 || v.chatTimeoutSeconds > 3600) return "聊天超时必须为 5-3600 秒";
+  if (!(v.accountConcurrencyLimit >= 1 && v.accountConcurrencyLimit <= 64))
+    return "账号并发上限必须为 1-64";
   if (v.imageTimeoutSeconds < 5 || v.imageTimeoutSeconds > 3600) return "图片超时必须为 5-3600 秒";
   if (!["silent", "error", "warn", "info", "debug"].includes(v.logLevel))
     return "日志等级必须为 silent、error、warn、info 或 debug";

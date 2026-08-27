@@ -20,6 +20,32 @@
     }
   ],
 
+  // Local dev mirrors the production DO bindings so the coordination paths
+  // (lockout / round-robin cursor / concurrency semaphore / refresh mutex)
+  // behave exactly as deployed.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_HUB",
+        "class_name": "McpSessionDO"
+      },
+      {
+        "name": "COORD",
+        "class_name": "CoordinationDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["McpSessionDO"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["CoordinationDO"]
+    }
+  ],
+
   "triggers": {
     "crons": ["*/30 * * * *"]
   }

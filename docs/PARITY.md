@@ -1,7 +1,8 @@
-# 移植完整度对比报告：M365-Copilot2API-on-Cloudflare-Worker vs 上游 M365-Copilot2API
+﻿# 移植完整度对比报告：M365-Copilot2API-on-Cloudflare-Worker vs 上游 M365-Copilot2API
 
 > 对照基准：上游 `internal/` 全部 Go 源文件、`server.go Routes()` 全部路由、README 功能表。
 > 最近全面核对：2026-08-26（含严格映射路由、tone 同步鉴权回退、KV 持久化等行为变更）。
+> **存储架构（2026-08-26 起，可选启用）**：绑定 D1（binding `DB`）后 usage 事件与调试记录改存 SQLite（`migrations/0001_init.sql`，原子 INSERT 不再丢记录、SQL 分页/过滤），并提供 `POST /api/admin/migrate/usage-kv-to-d1` 一次性回填历史 KV 日桶；migration 0002 另建 `chat_messages` 表存对话查看器转录（/v1/* 成功轮次 user+assistant 各一行）；绑定 DO（`MCP_HUB`→McpSessionDO，SQLite 类）后 MCP 会话跨 isolate 可用；绑定 DO（`COORD`→CoordinationDO，SQLite 类，migrations v2）后管理员登录失败锁定、账号轮询游标、每账号并发信号量与 token 刷新单飞互斥全部跨 isolate 强一致。未绑定的组件自动回退原 KV/isolate 行为。
 > 本文档逐项列出实现状态；未实现项均标注原因分类：
 > **[平台]** Workers 运行时能力限制（已确认裁剪）｜ **[简化]** 行为等价但实现方式适配 Workers/KV ｜ **[未做]** 尚未移植（技术上可行）｜ **[上游死代码]** 上游存在但未被任何路由调用
 
@@ -23,27 +24,27 @@
 | `GET /v1/sessions` | ✅ 完整 | 解析器会话 + 显式绑定合并列表 |
 | `POST /v1/sessions` | ✅ 完整 | session_id 查询/创建语义一致 |
 | `DELETE /v1/sessions/{id}` | ✅ 完整 | |
-| `/v1/mcp/sse` · `/v1/mcp/message` · `/v1/mcp/tools` | ❌ 未移植 | **[平台+未做]** MCP stdio 传输依赖子进程，Workers 无进程概念（已确认裁剪）；SSE 传输技术上可移植，尚未排期 |
-| `/v1/memory/flags` · `/instructions(+/id)` · `/settings` | ❌ 未移植 | **[未做]** 上游 memoryV2 功能族（用户记忆指令管理）；Worker 版 settings 无 FeatureFlags 字段 |
-| `GET /api/plugins` | ❌ 未移植 | **[未做]** 上游插件清单端点（配合 native 规划模式；该模式本身亦未移植） |
+| `/v1/mcp/sse` · `/v1/mcp/message` · `/v1/mcp/tools` | ✅ 完整 | MCP SSE server 移植（endpoint 握手帧、JSON-RPC 分发（initialize/tools/list/tools/call）、全局工具注册表（由 /v1/chat 请求工具自动合并 + settings.mcpServers 外部服务器桥接 #19）、tools/list 回退语义与 -32000/-32700/-32601 错误码逐字对齐。**桥接工具**经出站 SSE 客户端执行（30s 队列语义，超时回占位文案 #20）；未桥接的 tools/call 仍返回 no tools available。**差异** [平台]：无 MCP_HUB 绑定时会话表存 isolate 内存；stdio 出站传输不适用（Workers 无子进程），外部服务器走 SSE 传输 |
+| `/v1/memory/flags` · `/instructions(+/id)` · `/settings` | ✅ 完整 | substrate 透传代理（Bearer 账号 token + x-anchormailbox 等 5 头逐字对齐），变更操作要求管理员会话 cookie（403 语义一致）；FeatureFlags.memoryV2 开关（settings/env M365_ENABLE_MEMORY_V2）现可关闭 update_memory_plugin/add_custom_instructions 注入，默认开启；控制台另设 /api/admin/memory/* 管理员会话变体（见批次 F 卡片） |
+| `GET /api/plugins` | ❌ 未移植 | **[未做]** 上游插件清单端点（substrate EventListener 透传+5min 缓存）；native 工具事件抽取本身已移植（见机制表 native_tools.go 行），仅此清单端点缺 |
 
 ### /api/* 管理端点
 
 | 上游端点 | 状态 | 说明 |
 |---|---|---|
-| `POST /api/admin/login` | ✅ 完整 | 密码 SHA-256 哈希存 KV。**差异**：上游为 bcrypt 哈希 + zxcvbn 强度校验（M_REQUIRE_STRONG_ADMIN_PASSWORD）+ 密码历史；Worker 版无强度/历史策略，失败锁定为 isolate 内存态（5 次/15min），跨 isolate 不共享 [简化] |
+| `POST /api/admin/login` | ✅ 完整 | 密码 SHA-256 哈希存 KV。仅要求非默认密码+长度 6-256（强度/历史策略曾移植后按用户要求回退）。**差异**：哈希算法为 SHA-256（上游 bcrypt）；失败锁定 5 次/15min 经 CoordinationDO 全局共享（绑定 COORD 时，未绑定为无锁定） |
 | `/api/admin/logout` · `/api/admin/session` | ✅ 完整 | |
 | `POST /api/admin/change-password` | ✅ 完整 | 含强制改密门禁、全会话失效 |
 | `/api/admin/keys` GET/POST/PUT/DELETE | ✅ 完整 | 仅哈希存储、回读语义一致 |
 | `GET /api/admin/models` | ✅ 完整 | |
 | `POST /api/admin/models/test` | ✅ 完整 | 真实 ChatHub 连通测试，走管理员会话鉴权 |
 | `POST /api/admin/models/sync` | ✅ 完整 | 两级探测：匿名 CDN bundle 正则 → 失败时用账号池 accessToken 以 Bearer 重试应用页面及其 bundle（已实测可拉取）。非空结果持久化到 KV `discoveredTones`，保留至下次成功同步覆盖。**与上游差异**：上游结果仅存内存（24h TTL+后台自动重同步，重启即失），校验走动态白名单（liveUpstreamTones 动态优先、回退内置 13 个含 Magic/Gpt_5_2_Auto）；Worker 版无白名单、纯格式校验、KV 持久化、手动覆盖 |
-| `GET/PUT /api/admin/settings` | ⚠️ 部分 | 校验规则基本移植。**行为差异**：上游允许空 modelMappings，Worker 版要求至少一条；tone 校验上游为动态白名单、Worker 为纯格式。**缺口**：OAuth 相关字段（clientId/authority/redirectUri/scope）保存后**不生效**——上游通过 ApplyStartupSettingsEnv 在启动时把持久化设置灌入环境变量，Workers 的绑定变量在部署时固定，控制台修改无法覆盖 [未做，可通过 wrangler vars 解决]；listenAddress/configPath/tokenCachePath/debugLogPath 等字段在 Workers 上天然无效 [平台]；licenseType/scenario/AccountConcurrencyLimit/FeatureFlags（M365_ENABLE_* 8 项）字段未移植 |
+| `GET/PUT /api/admin/settings` | ⚠️ 部分 | 校验规则基本移植。**行为差异**：上游允许空 modelMappings，Worker 版要求至少一条；tone 校验上游为动态白名单、Worker 为纯格式。**OAuth 字段已可热生效**：clientId/authority/redirectUri/scope 保存后经 effectiveOAuthConfig 在授权/刷新流程优先于 env（images 刷新路径仍用 env）[简化]；listenAddress/configPath/tokenCachePath/debugLogPath 等字段在 Workers 上天然无效 [平台]；licenseType/scenario/accountConcurrencyLimit/mcpServers/featureFlags（env M365_ENABLE_* 播种，memoryV2 实际生效）均已入 settings 可持久化 |
 | `/api/admin/proxy-pool` | ❌ 已移除 | **[平台→已删除]** Workers fetch 不支持 HTTP/SOCKS 出站代理；应用户要求已彻底移除端点（控制台对应操作将收到 404） |
 | `/api/accounts/bind-proxy` | ❌ 已移除 | 同上 |
-| `/api/admin/deployments` · `/deployment` · `/deployment/check` | ❌ 占位 | Codex 反向代理部署管理。**原因**：依赖本地文件持久化与自定义反代 URL 管理，与 Worker 无状态模型冲突；控制台对应页签不可用 [未做] |
-| `/api/admin/debug/logs` · `/debug/detail` | ❌ 占位 | **[未做]** 上游为内存环形 debug 存储（M365_TRACE=1 时记录请求/响应元数据）；Workers 对应方案是 Workers Logs/tail workers，未移植采集侧 |
-| `GET /api/health` | ⚠️ 等价 | accountConcurrency 恒为 `{}`（并发限制器未移植，见下） |
+| `/api/admin/deployments` · `/deployment` · `/deployment/check` | ⚠️ 空实现 | GET 返回 `{"items":[]}`（形状与上游一致）；创建/改 URL/探活返回 501——在 Workers 上自部署管理自身无意义 [应用户要求补齐形状] |
+| `/api/admin/debug/logs` · `/debug/detail` | ✅ 完整 | KV 版环形存储：仅 logLevel=debug 时捕获 /v1/* 请求/响应（≤256KiB 截断、24h TTL、最新 500 条），脱敏键表 25 条逐字对齐，响应 JSON 形状一致。**#21 已补齐**：SSE 流式响应经 tee 后台聚合（≤256KiB）后补录 responseBody，与上游流式调试行为一致；M365_TRACE 属 chathub 内部日志，仍走 console |
+| `GET /api/health` | ⚠️ 等价 | accountConcurrency 恒为 `{}`（限制器经 CoordinationDO 已生效，但健康端点不回读 DO 实时占用，避免每请求额外往返） |
 | `GET /api/version` | ⚠️ 等价 | version 为 `0.5.0-cfworker.x` 标识；go 字段填 `cloudflare-workers`；uptimeSeconds 恒 0（isolate 无常驻概念）；proxyPool 计数字段已随代理池移除 [平台] |
 | `GET /api/update` | ✅ 等价 | 上游本身即为只读 stub（updateAvailable 恒 false） |
 | `GET /api/accounts` | ✅ 完整 | 冷却/健康快照来自 KV；callCount 恒 0（计数器随并发限制器一并省略）|
@@ -58,10 +59,10 @@
 | `POST /api/chat/stream` | ✅ 完整 | 归一化事件+语义事件+done 帧，与上游同为完成后发送 |
 | `GET /api/conversations` | ⚠️ 简化 | 返回显式绑定（sessions.json 等价物）。上游同源；形状含 id/conversationId/title 等，兼容控制台 |
 | `POST /api/conversations/delete` | ✅ 完整 | 本地索引+绑定联动删除 |
-| `POST /api/conversations/cleanup` | ❌ 占位 | **[未做]** conversation_manager 的 after_response/keep_n/max_age 三种清理模式未移植；云端回收由 Cron 自动清理承担（见下） |
-| `/api/conversations/whitelist` | ❌ 占位 | **[未做]** 白名单机制未移植（自动清理的保护集目前只含活跃会话与最近使用记录） |
+| `POST /api/conversations/cleanup` | ✅ 模式化 | conversation_manager 三模式已映射到 Cron 清理：`M365_CLEANUP_MODE=after_response\|keep_n\|max_age`（+KEEP_N/MAX_AGE_HOURS 旋钮）；白名单与 userSessions 活跃集并入保护集，删除联动解绑（dropConversation）一致 |
+| `/api/conversations/whitelist` | ✅ 完整 | KV 持久化白名单（GET 列表 / POST add·remove 单或批量），并入 Cron 清理保护集，永不回收 |
 | `GET /api/m365/conversations` | ⚠️ 简化 | 云端列表已移植（RefreshNavPane action API）。**缺口**：上游会把解析器会话合并进列表（gateway 来源标记、chatName 从历史推导、messageCount 统计），本移植仅返回云端原始行 [未做] |
-| `GET /api/m365/conversations/detail` | ❌ 占位 | **[未做]** 应返回解析器 ContextHistory 消息数组供控制台对话查看器使用，当前返回空 |
+| `GET /api/m365/conversations/detail` | ⚠️ 等价 | 按 seq 组装 ContextHistory 形状（role/content 消息数组+chatName/messageCount/accountEmail 等）供控制台对话查看器渲染；数据来自 /v1/* 成功轮次在 D1 `chat_messages` 表的转录（migration 0002，单条 64KiB 截断，TTL=cron DELETE 7 天，对话删除联动清除）。**差异**：仅记录本版本部署后的 /v1/* 轮次（无历史回填），控制台 /api/chat 预览对话不入库；D1 未绑定时返回空时间线并带 detail_unavailable 标记 [简化] |
 | `POST /api/m365/conversations/delete` | ✅ 完整 | 云端 DeleteConversation + 本地联动 |
 | `POST /api/m365/conversations/cleanup` | ❌ 占位 | 循环拉取清空全部对话的逻辑未移植；Cron 自动清理是受预算约束的等价物 [简化] |
 | `GET /api/stats` · `POST /api/stats/reset` | ✅ 完整 | 缓存命中统计真实数据（KV） |
@@ -84,28 +85,29 @@
 | OAuth PKCE（S256、nativeclient 手动粘贴流、AADSTS 错误归类） | ✅ 完整 | |
 | Device Code 流（auth/device.go StartDeviceCode/PollDeviceCode） | — | **[上游死代码]** 上游未挂接任何路由；仅 FOCI clientId 影响 refresh endpoint 选择，该逻辑已移植 |
 | ROPC 密码登录 | ✅ 完整 | |
-| Token 刷新单飞防抖（AAD 刷新令牌一次性） | ⚠️ isolate 内 | 跨 isolate 并发刷新可能竞态；个人自部署概率极低 [简化] |
-| 账号轮询 round-robin | ✅ 完整 | nextIdx 持久化 KV |
+| Token 刷新单飞防抖（AAD 刷新令牌一次性） | ✅ 完整 | isolate 内 promise 合并 + CoordinationDO 命名互斥（"refresh:<id>"，30s TTL）跨 isolate 单飞；未抢到的一方轮询 KV 等待远端结果（≤15s），避免烧掉第二枚一次性 refresh token。COORD 未绑定时退回 isolate 内防抖 |
+| 账号轮询 round-robin | ✅ 完整 | COORD 绑定时游标存 DO（跨 isolate 原子，KV accounts 文档不再每次写 nextIdx）；未绑定时 nextIdx 持久化 KV |
 | 账号健康（限流冷却/auth 失败冷却/MarkSuccess 清除/最早恢复时间） | ✅ 完整 | KV 持久化 |
-| 账号并发限制（account_concurrency.go，默认每账号 8） | ❌ 未移植 | **[未做]** 需要 Durable Object 原子计数器才能跨 isolate 强一致；当前靠上游 429 自然背压 |
+| 账号并发限制（account_concurrency.go，默认每账号 8） | ✅ 完整 | CoordinationDO 信号量（#11 执行器）：resolveAndValidateAccount 处 acquire（上限=settings.accountConcurrencyLimit，满时 DO 内有界等待后 429+Retry-After 背压）、上游工作结束 finally release；15min 租约 TTL + alarm 兜底回收崩溃 isolate 泄漏的槽位；COORD 未绑定时无门控（靠上游 429 自然背压） |
 | 故障转移（429/401/403 且未钉定账号/会话时换号重试） | ✅ 完整 | |
 | 内容键会话复用（显式 ID > 严格前缀 > 同后缀 ≥2；IP+UA 指纹隔离；512 条历史上限；LRU 1000） | ✅ 逐字移植 | README 所述"Jaccard 相似度兜底"在上游代码中并不存在（文档滞后），实际为前后缀匹配，已如实移植 |
 | 会话/上下文 TTL 环境变量（SESSION_TTL/CONTEXT_TTL_MINUTES） | ❌ 固定 2h | **[未做]** 环境旋钮未读取（M365_CONTEXT_SIMILARITY 上游代码中亦不存在） |
-| 用户级会话（body.user → userSessionStore 固定账号+对话） | ❌ 未移植 | **[未做]** openaiChat 的 User 分支及其 Put/Get 未实现 |
-| 对话缓存 convCache（account+model 维度 system-prompt-hash 增量复用） | ❌ 未移植 | **[未做]** 与会话复用重叠度高，独立收益有限；上游命中时可省系统提示词重建延迟 |
+| 用户级会话（body.user → userSessionStore 固定账号+对话） | ✅ 完整 | tenant=SHA-256(API key) 隔离、7 天 TTL 惰性清理、响应后回写；活跃集并入清理保护集 |
+| X-Request-ID 响应头关联 | ✅ 完整 | 所有 API 响应（含鉴权失败与 404）携带内部 requestId |
+| 对话缓存 convCache（account+model 维度 system-prompt-hash 增量复用） | ✅ 完整 | KV 键 `convcache:<apiKeyHash|anon>|<accId|auto>|<model>`（比上游多一层 API key 隔离），存 {accountId,conversationId,sessionId,messageCount,sysHash,lastUsedAt}，TTL 2h；prepareCore 无显式 conv 且 sysHash 一致且新条数>缓存时复用并增量 flatten(messages[count:])，命中即钉定缓存账号；recordFinalize 应答轮回写；无系统提示词的对话不参与（隔离保护） |
 | 自动清理（闲置 2h / keepN=5 / 活跃保护集 / 删除联动解绑 / 100 轮滑动窗口） | ✅ 完整 | Cron 每 30 分钟执行；新增单次 30 个删除预算（Free 子请求限制保护）[简化] |
-| 白名单（conversationManager.WhitelistedIDs 进保护集） | ❌ 未移植 | 见路由表 |
+| 白名单（conversationManager.WhitelistedIDs 进保护集） | ✅ 完整 | KV 持久化 + 清理保护集 + 控制台白名单管理卡片 |
 | WS 连接池（connpool.go Take/Return 复用） | ❌ 裁剪 | **[平台]** isolate 无法跨请求持有连接；每请求新建（上游 Dialer 直连路径同样支持） |
 | 连接预热（preheater.go） | — | **[上游死代码]** 上游 Preheater 本身就是 stub（Take 返回 nil、Stats 返回 mode:stub），无功能损失 |
 | Function calling router 模式 | ✅ 完整 | CALL_TOOL/JSON 信封/修复轮/并行自适应限制（exec 类串行） |
 | Function calling fenced 检测（```bash 自动转换+裸 JSON command 扫描+声明校验） | ✅ 完整 | |
 | 流式围栏扣留（疑似工具调用文本不外流，确认后整体转分片 tool_calls） | ✅ 完整 | rune 边界保持 |
-| 原生事件工具检测（native_tools.go walk） | ✅ 完整 | |
+| 原生事件工具检测（native_tools.go walk + events.go extractToolEvents） | ✅ 完整 | extractToolEvents 递归遍历 update 帧参数所有层级（name/toolName/pluginName/functionName × arguments/args/parameters/input/functionArguments 双字段判定，按 name+JSON(args) 去重）→ nativeToolCalls 仅收声明过的工具名（call_ uuid id）；流式路径同样接入（fenced→native→校验/限额，tool 事件只收集不出文本），且流式请求现同样下发 toolPlugins/MCPServerURL |
 | JSON Schema 校验信任边界 | ✅ 完整 | object/array/string/number/integer/boolean/null/enum/required/additionalProperties |
 | `<m365-tool-call>` 协议块提取 | ✅ 完整 | |
 | 工具响应写出（流式 512B 参数分片 + finish_reason=tool_calls + usage chunk） | ✅ 完整 | |
-| **Native 规划模式注入**（planningMode=native 时把 tools 作为 ChatHub payload `plugins` 下发 + MCPServerURL 插件桥接） | ❌ 未移植 | **[未做]** chatPayload 恒发空 plugins；settings 的 toolPlanningMode=native 目前无实际效果，一律走 router/事后检测路径。影响需要云端原生规划的场景 |
-| Agent ledger（证据链 RouterContext/CanContinue 轮次熔断/completionEvidenceAllows 收尾校验） | ❌ 未移植 | **[未做]** router 提示词中的"已完成调用不得重复"规则已保留，跨轮证据链与轮次硬限制缺失 |
+| Native 规划模式注入（planningMode=native 时把 tools 作为 ChatHub payload `plugins` 下发 + MCPServerURL 插件桥接） | ✅ 完整 | 请求带 tools 时自动合并进 MCP 全局注册表，chatPayload 下发 API plugins + mcp-gateway(MCPServerURL=/v1/mcp/sse) 条目，无工具时回落 BingWebSearch 内置；云端原生 tool 事件 → OpenAI tool_calls 的转换链路已接通（fenced→native→schema 校验/限额，流式与非流式一致） |
+| Agent ledger（证据链 RouterContext/CanContinue 轮次熔断/completionEvidenceAllows 收尾校验） | ✅ 完整 | `src/pipeline/ledger.ts` 纯函数移植：每请求从 messages 重建（assistant.tool_calls 建 id→{name,args}、role=tool 按 tool_call_id 回填 Result 并 compact 头 limit/3+尾 limit-head-80）；失败正则逐字对齐；签名计数 name\0args 规范化（trimmed+合法 JSON 键序重排重序列化）≥2 RepeatedCall/≥3 StuckLoop，失败签名（小写+数字→#+截500）≥2 RepeatedFailure/≥3 StuckLoop；CanContinue 依次报轮数达限/StuckLoop/RepeatedFailure/pending 未回填并熔断 router 规划轮；RouterContext（"A completed call is final evidence…"+EVIDENCE_LEDGER JSON+FINAL ANSWER RULE）注入 router 提示词；completionEvidenceAllows 收尾校验（pending→false/无证据却称完成→false/有证据却称无法确认→false），违例且请求带工具时正文替换为固定免责句 |
 | validateToolConversation（tool 消息格式前置校验） | ❌ 未移植 | **[未做]** 格式异常消息会进入 flatten 渲染而非 400 拒绝 |
 | 工具进度卡（tool_progress.go parseToolProgress + Progress 事件转发） | ⚠️ 部分 | Responses 转换无条件跳过该类项；聊天流内 Progress 事件不透传（上游在 chatStream 语义事件里透传——该部分已移植） |
 | Codex 模型目录（capabilities 双位置/effort 预设/truncation policy 等 60+ 字段） | ✅ 完整 | |
@@ -121,8 +123,7 @@
 | 管理员安全（强制改密/会话 Cookie HttpOnly+SameSite/SameSite=Lax/登出失效/X-Forwarded-Proto Secure 判定） | ✅ 完整 | |
 | 安全响应头（nosniff/X-Frame-Options/Referrer-Policy） | ✅ 完整 | |
 | 完整 CSP 头（style/script 白名单域名等） | ❌ 页面缺失 | **[未做]** Static Assets 直接服务页面绕过了 Worker 头注入；需 `_headers` 文件补 CSP |
-| X-Request-ID 响应头关联 | ❌ 未移植 | **[未做]** 内部已生成 requestId 用于日志，但未写入响应头 |
-| httpTrace 访问日志中间件 | ❌ 未移植 | **[未做]** Workers 自带请求日志（wrangler tail / dashboard）覆盖同一需求 |
+| httpTrace 访问日志中间件 | ⚠️ 等价 | Workers 内置请求日志（wrangler tail / dashboard）覆盖同一需求；X-Request-ID 响应头已补齐 |
 | recover 中间件 | ✅ 等价 | fetch 入口 try/catch 500 JSON |
 | 数据文件原子写（atomicfile 0600） | — | **[平台]** KV 无文件语义；敏感数据仅存哈希或服务端密文边界内 |
 | refresh token 落盘加密（auth/cache.go AES-GCM，M365_MASTER_KEY） | ❌ 差异 | **[未做]** Worker 版账号 token（含 access/refresh）以明文 JSON 存 KV（`src/store/accounts.ts`），依赖 KV 边界安全；上游落盘前 AES-GCM 加密 |
@@ -132,7 +133,7 @@
 | manage.py / Dockerfile / docker-compose | — | 由 wrangler dev/deploy 替代 |
 | pkce_auth_gateway.py 本地回调网关 | — | Workers 部署无需；nativeclient 粘贴流 + loopback 自动关窗页均可用 |
 | scripts/*.py 探针 | — | 开发期工具，不属于运行时 |
-| 测试套件（go test ./...） | ⚠️ 等价替换 | vitest 57 例覆盖协议/解析器/工具/转换/错误体系关键路径；上游集成类测试（真实 WS 往返）不在单元范围 |
+| 测试套件（go test ./...） | ⚠️ 等价替换 | vitest 159 例覆盖协议/解析器/工具/原生事件抽取/agent ledger/协调 DO/对话转录与详情查看器/convCache/出站 MCP 客户端与桥接/流式调试聚合/转换/错误体系关键路径；上游集成类测试（真实 WS 往返）不在单元范围 |
 
 ---
 
@@ -143,14 +144,15 @@
 | ADMIN_PASSWORD / M365_BROWSER_* / M365_CLIENT_ID / M365_AUTHORITY / M365_REDIRECT_URI / M365_SCOPE / M365_DEVICE_* | ✅ 生效（vars/secrets） |
 | M365_CHAT_TIMEOUT_SECONDS / M365_AUTO_CLEANUP* | ✅ 生效 |
 | M365_INCLUDE_UPSTREAM_EVENTS | ❌ **[未做]** 随 m365.events 元数据开关未移植 |
+| M365_ENABLE_MEMORY_V2 / DEEP_WORK / COMPUTER_USE / REALTIME_VOICE / SYSTEM_PROMPT_OVERRIDE / DESIGNER_IMAGE_GEN_4O / CODE_CANVAS / SYDNEY_RECONNECT | ⚠️ 播种至 settings | 启动时读入 settings.featureFlags（memoryV2 默认开、其余默认关）；memoryV2 实际生效（门控 memory optionsSets），其余 flag 存储待逐个核对上游 payload 效果后接线 |
 | M365_LISTEN / M365_DATA_DIR / M365_CONFIG / M365_TOKEN_CACHE / M365_SESSION_CACHE / M365_API_KEYS / M365_USAGE_LOG / M365_DEBUG_LOG / M365_PERSIST_INTERVAL | — **[平台]** 无文件系统/端口概念 |
 | M365_PROXY_POOL / M365_PROXY_INSECURE_TLS / M365_PROXY_HEALTH_URL / outbound.EnvProxy | ❌ **[平台]** 代理池裁剪 |
 | M365_SESSION_TTL_MINUTES / M365_CONTEXT_TTL_MINUTES | ❌ **[未做]** 固定 2h 默认值 |
 | M365_CONTEXT_SIMILARITY | — **[上游死代码]** 代码中不存在 |
-| M365_MAX_TOOL_CALLS_PER_TURN / M365_MAX_TOOL_ROUNDS | ⚠️ 前者经 settings 生效；后者属 agent ledger 轮次熔断，随 ledger 未移植 |
+| M365_MAX_TOOL_CALLS_PER_TURN / M365_MAX_TOOL_ROUNDS | ✅ 经 settings 生效 | 两者均为控制台可编辑设置（maxToolCallsPerTurn/maxToolRounds）；后者驱动 agent ledger 的 CanContinue 轮次熔断（env 变量本身不直接读取，与其他 settings 字段一致走 KV） |
 | M365_PUBLIC_IDENTITY_POLICY | ❌ 随 public_identity 未移植 |
 | M365_TRACE | ❌ **[未做]** 详细 trace 日志未实现（console.error 关键路径已有） |
-| M365_USER_SESSION_TTL_MINUTES / M365_ACCOUNT_DEFAULT_CONCURRENCY | ❌ 随用户会话/并发限制器未移植 |
+| M365_USER_SESSION_TTL_MINUTES / M365_ACCOUNT_DEFAULT_CONCURRENCY | ⚠️ 后者经 settings 生效 | 并发上限为控制台可编辑设置 accountConcurrencyLimit（默认 8，由 CoordinationDO 信号量执行）；userSessions TTL 固定 7 天，TTL 旋钮未读取 |
 | M365_AUTHORIZE_ENDPOINT / M365_TOKEN_ENDPOINT / M365_DEVICE_ENDPOINT / M365_DEVICE_TOKEN_ENDPOINT | ⚠️ authorize/token 主端点可由 authority 推导覆盖；四个精确端点覆写变量未单独读取 |
 
 ---
@@ -161,12 +163,13 @@
 |---|---|
 | 登录/改密/仪表盘/账号/API Keys/用量/缓存统计/模型测试/设置（运行时字段） | ✅ 可用 |
 | 「模型管理」页（映射+可用性测试合一） | ✅ 增强 | 上游无映射编辑 UI（只能裸调 PUT settings），仅有独立"Model Test"单表；Worker 版为映射编辑+行内测试+状态/延迟/回复一体的合并表格 |
-| 「对话」页列表+删除 | ✅ 可用（列表不含 gateway 合并行，查看器详情按钮打开后无历史内容） |
-| 「对话」页查看器详情（conversation.html?id=） | ⚠️ 打开但无消息内容（detail 端点占位） |
+| 「对话」页列表+删除+白名单管理 | ✅ 可用（列表不含 gateway 合并行；白名单卡片支持添加/移除，实时防清理保护） |
+| 「对话」页查看器详情（conversation.html?id=） | ✅ 可用 | detail 端点返回 D1 转录消息数组（/v1/* 成功轮次，7 天 TTL），时间线按序渲染 user/assistant 消息 |
 | 「代理池」页 | ✅ 已彻底移除：导航入口、页面区块、账号表 Proxy 列/Bind 按钮、相关 JS 函数与 showPage 钩子均从 `assets/index.html` 删除（内联脚本通过 node --check 校验）；i18n 词典残留少量不可见死键，不影响任何功能 |
 | 「部署」页 | ❌ 空数据（deployments 占位） |
 | 「调试日志」入口 | ❌ 空数据（debug 占位） |
 | 设置页 OAuth 字段修改 | ⚠️ 保存成功但不生效（见 settings 行说明） |
+| 「对话」页白名单卡片 · 设置页 M365 Memory 卡片（flags/instructions JSON 编辑+按 ID 删除） | ✅ 新增（批次 F；经 /api/admin/memory/* 管理员会话变体驱动 substrate） |
 
 ---
 
@@ -174,6 +177,6 @@
 
 1. **高**：`/api/m365/conversations` 合并解析器会话 + `detail` 返回 ContextHistory（控制台体验闭环）
 2. **高**：附件 SSRF 校验（scheme/host 白名单级即可）与远程图先下载再上传对齐上游
-3. **中**：native 规划模式 payload 注入（tools → plugins），否则该设置形同虚设
+3. ~~**中**：native 规划模式 payload 注入（tools → plugins）~~ ✅ 已完成（含云端原生 tool 事件→tool_calls 转换链路与 agent ledger，2026-08-26）
 4. **中**：SESSION/CONTEXT TTL 旋钮读取；X-Request-ID 响应头；页面 CSP（assets `_headers`）
-5. **低**：userSessions、convCache、agent ledger、whitelist、conversation_manager 清理模式、MCP SSE、public_identity
+5. ~~**低**：agent ledger~~ ✅（批次 A）；~~convCache~~ ✅、~~whitelist 控制台卡片~~ ✅、~~MCP SSE 出站客户端~~ ✅（批次 D/E/F，2026-08-26）；余项（userSessions TTL 旋钮、conversation_manager 细粒度清理模式、public_identity）仍待后续

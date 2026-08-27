@@ -2305,6 +2305,30 @@ background: #d9a600;
                 </tbody>
               </table>
             </div>
+
+            <div class="card" style="margin-top: 16px">
+              <div class="card-head">
+                <span data-i18n="wl.title" class="card-title">Whitelist</span>
+              </div>
+              <div class="card-body">
+                <p class="form-hint" style="margin-bottom: 10px" data-i18n="wl.hint">Whitelisted conversation IDs are protected from the auto-cleanup sweep and never recycled.</p>
+                <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+                  <input class="form-input" id="wlInput" style="flex:1;min-width:220px" placeholder="conversation-id" onkeydown="if(event.key==='Enter')addWhitelist()">
+                  <button class="btn primary" onclick="addWhitelist()" data-i18n="wl.add">Add</button>
+                </div>
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th data-i18n="wl.th.id">Conversation ID</th>
+                      <th data-i18n="th.actions">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="whitelistRows">
+                    <tr><td colspan="2" class="empty" data-i18n="common.loading">Loading...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </section>
 
           <!-- Model Management -->
@@ -2376,6 +2400,33 @@ background: #d9a600;
                   <button data-i18n="settings.save" class="btn primary" onclick="saveSettings()">
                     Save Settings
                   </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="card" style="margin-top: 16px">
+              <div class="card-head">
+                <span data-i18n="mem.title" class="card-title">M365 Memory</span>
+              </div>
+              <div class="card-body">
+                <p class="form-hint" style="margin-bottom: 10px" data-i18n="mem.hint">Personalization flags and custom instructions stored in M365 (substrate). Edits apply to the account pool token.</p>
+                <div class="form-group">
+                  <label class="form-label" data-i18n="mem.flags">Personalization Flags (JSON)</label>
+                  <textarea class="form-input" id="memFlagsJson" rows="6" style="font-family:ui-monospace,monospace;font-size:12px"></textarea>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+                  <button class="btn" onclick="loadMemoryFlags()" data-i18n="mem.reload">Reload</button>
+                  <button class="btn primary" onclick="saveMemoryFlags()" data-i18n="mem.saveFlags">Save Flags</button>
+                </div>
+                <div class="form-group">
+                  <label class="form-label" data-i18n="mem.instructions">Custom Instructions (JSON)</label>
+                  <textarea class="form-input" id="memInstructionsJson" rows="8" style="font-family:ui-monospace,monospace;font-size:12px"></textarea>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <button class="btn" onclick="loadMemoryInstructions()" data-i18n="mem.reload">Reload</button>
+                  <button class="btn primary" onclick="saveMemoryInstructions()" data-i18n="mem.saveInstructions">Save Instructions</button>
+                  <input class="form-input" id="memInstructionId" style="max-width:220px" placeholder="instruction-id">
+                  <button class="btn danger" onclick="deleteMemoryInstruction()" data-i18n="mem.deleteInstruction">Delete by ID</button>
                 </div>
               </div>
             </div>
@@ -2492,6 +2543,8 @@ window.I18N_DICT={
   "map.opt.defaults": "--- Default Tones",
   "map.opt.fetched": "--- Fetched Tones",
   "berr.noMappings": "At least one model mapping is required",
+  "pw.err.default": "New password must not be the default password",
+  "pw.err.tooLong": "New password is too long",
   "sync.persisted": "(saved {n} fetched tones)",
   "map.th.id": "Public Model ID",
   "map.th.tone": "Upstream Tone",
@@ -2633,6 +2686,22 @@ window.I18N_DICT={
   "useKey.title": "Use API Key",
   "useKey.btn": "Use Key",
   "conv.manage": "Conversation management",
+  "wl.title": "Whitelist",
+  "wl.hint": "Whitelisted conversation IDs are protected from the auto-cleanup sweep and never recycled.",
+  "wl.add": "Add",
+  "wl.none": "Whitelist is empty",
+  "wl.th.id": "Conversation ID",
+  "wl.confirmRemove": "Remove this conversation from the whitelist?",
+  "mem.title": "M365 Memory",
+  "mem.hint": "Personalization flags and custom instructions stored in M365 (substrate). Edits apply to the account pool token.",
+  "mem.flags": "Personalization Flags (JSON)",
+  "mem.instructions": "Custom Instructions (JSON)",
+  "mem.reload": "Reload",
+  "mem.saveFlags": "Save Flags",
+  "mem.saveInstructions": "Save Instructions",
+  "mem.deleteInstruction": "Delete by ID",
+  "mem.saved": "Saved",
+  "mem.confirmDelete": "Delete this instruction from M365?",
   "conv.list": "Conversation List",
   "conv.clear": "Clear",
   "th.messages": "Messages",
@@ -2686,9 +2755,12 @@ window.I18N_DICT={
   "common.edit": "Edit",
   "state.enable": "Enable",
   "state.disable": "Disable",
+  "acc.schedOn": "Enabled",
+  "acc.schedOff": "Disabled",
   "acc.cooldownUntil": "Cooldown until",
   "oauth.start": "Start Authorization",
   "oauth.confirmAdd": "Confirm And Add",
+  "u.last24hReq": "{n} requests",
   "u.requestsToday": "{n} requests today",
   "u.todayPlus": "Today +{n}",
   "u.inOut": "Input {a} · Output {b}",
@@ -2764,6 +2836,8 @@ window.I18N_DICT={
   "map.opt.defaults": "--- 默认 Tones",
   "map.opt.fetched": "--- 手动拉取 Tones",
   "berr.noMappings": "至少需要配置一条模型映射",
+  "pw.err.default": "新密码不能与默认密码相同",
+  "pw.err.tooLong": "新密码过长",
   "sync.persisted": "(已保存拉取的 {n} 个 tone)",
   "map.th.id": "公开模型 ID",
   "map.th.tone": "上游 tone",
@@ -2905,6 +2979,22 @@ window.I18N_DICT={
   "useKey.title": "使用 API 密钥",
   "useKey.btn": "使用",
   "conv.manage": "对话管理",
+  "wl.title": "白名单",
+  "wl.hint": "加入白名单的对话 ID 受自动清理保护，永远不会被回收。",
+  "wl.add": "添加",
+  "wl.none": "白名单为空",
+  "wl.th.id": "对话 ID",
+  "wl.confirmRemove": "确定将该对话移出白名单？",
+  "mem.title": "M365 记忆",
+  "mem.hint": "存储在 M365（substrate）中的个性化开关与自定义指令。修改将作用于账号池令牌。",
+  "mem.flags": "个性化开关（JSON）",
+  "mem.instructions": "自定义指令（JSON）",
+  "mem.reload": "重新加载",
+  "mem.saveFlags": "保存开关",
+  "mem.saveInstructions": "保存指令",
+  "mem.deleteInstruction": "按 ID 删除",
+  "mem.saved": "已保存",
+  "mem.confirmDelete": "确定从 M365 删除该指令？",
   "conv.list": "对话列表",
   "conv.clear": "清空",
   "th.messages": "消息数",
@@ -2947,9 +3037,12 @@ window.I18N_DICT={
   "common.edit": "编辑",
   "state.enable": "启用",
   "state.disable": "禁用",
+  "acc.schedOn": "已启用",
+  "acc.schedOff": "已停用",
   "acc.cooldownUntil": "冷却至",
   "oauth.start": "开始授权",
   "oauth.confirmAdd": "确认添加",
+  "u.last24hReq": "{n} 次请求",
   "u.requestsToday": "今日 {n} 次请求",
   "u.todayPlus": "今日 +{n}",
   "u.inOut": "输入 {a} · 输出 {b}",
@@ -3012,6 +3105,9 @@ window.I18N_DICT={
       const pages={dashboard:'Dashboard',usage:'Usage',accounts:'Accounts',apikeys:'API Keys',conversations:'Conversations',modeltest:'Model Management',settings:'Settings'};
 const BACKEND_MSG_MAP=[
 [/^至少需要配置一条模型映射$/, 'berr.noMappings'],
+[/^新密码不能与默认密码相同$/, 'pw.err.default'],
+[/^新密码长度至少/, 'pw.err.min'],
+[/^新密码过长$/, 'pw.err.tooLong'],
 [/^每轮工具调用数必须为 1-64$/, 'berr.toolCalls'],
 [/^最大工具轮次必须为 1-512$/, 'berr.rounds'],
 [/^上下文窗口不能小于 1024$/, 'berr.window'],
@@ -3052,9 +3148,9 @@ return msg;
         if(p==='usage')loadUsage();
         if(p==='accounts')loadAccounts();
         if(p==='apikeys')loadKeys();
-        if(p==='conversations')loadConversations();
+        if(p==='conversations'){loadConversations();loadWhitelist();}
         if(p==='modeltest'){loadModelMappings();}
-        if(p==='settings')loadSettings();
+        if(p==='settings'){loadSettings();loadMemoryFlags();loadMemoryInstructions();}
       }
 
       let onboardingHidden=false;
@@ -3127,9 +3223,9 @@ return msg;
           $('ovCacheRate').textContent=t('stat.hitRateVal',{v:((s.hit_rate||0)).toFixed(1)});
           const sum=(u.stats||{}).summary||{};
           $('ov24hTok').textContent=fmtTok(sum.last24h_tokens||0);
-          $('ov24hReq').textContent=(sum.last24h_requests||0)+' requests';
+          $('ov24hReq').textContent=t('u.last24hReq',{n:(sum.last24h_requests||0)});
           $('ovTotalTok').textContent=fmtTok(sum.tokens||0);
-          $('ovTotalReq').textContent=(sum.requests||0)+' requests';
+          $('ovTotalReq').textContent=t('u.last24hReq',{n:(sum.requests||0)});
           $('ovTodayTok').textContent=fmtTok(sum.today_tokens||0);
           $('ovTodayReq').textContent=t('u.requestsToday',{n:(sum.today_requests||0)});
           loadRecentRequests();
@@ -3166,7 +3262,7 @@ return msg;
           const status=x.status==='cooldown'?`<div><span class="status cooldown"><i></i>${t('status.cooldown')}</span>${cooldown}</div>`:x.status==='online'?'<span class="status online"><i></i>'+t('status.online')+'</span>':'<span class="status offline"><i></i>'+t('status.offline')+'</span>';
           const calls=x.rateLimited?t('acc.limited',{n:x.callCount||0}):t('acc.called',{n:x.callCount||0});
           const scheduleEnabled=x.scheduleEnabled!==false;
-          return `<tr><td><div class="account-cell"><div class="avatar">${(x.displayName||x.email||'M')[0]}</div><div><b>${x.displayName||x.email}</b><div style="font-size:11px;color:var(--muted)">${x.email||''}</div></div></div></td><td style="font-size:12px;white-space:nowrap">${calls}</td><td>${status}</td><td style="font-size:12px;color:var(--muted)">${x.updatedAt?new Date(x.updatedAt).toLocaleString():'-'}</td><td><button class="btn-sm btn${scheduleEnabled?'':' danger'}" onclick="toggleAccountSchedule('${x.id}',${!scheduleEnabled})">${scheduleEnabled?'Enabled':'Disabled'}</button></td><td><button class="btn-sm btn danger" onclick="deleteAccount('${x.id}')">Delete</button></td></tr>`;
+          return `<tr><td><div class="account-cell"><div class="avatar">${(x.displayName||x.email||'M')[0]}</div><div><b>${x.displayName||x.email}</b><div style="font-size:11px;color:var(--muted)">${x.email||''}</div></div></div></td><td style="font-size:12px;white-space:nowrap">${calls}</td><td>${status}</td><td style="font-size:12px;color:var(--muted)">${x.updatedAt?new Date(x.updatedAt).toLocaleString():'-'}</td><td><button class="btn-sm btn${scheduleEnabled?'':' danger'}" onclick="toggleAccountSchedule('${x.id}',${!scheduleEnabled})">${scheduleEnabled?t('acc.schedOn'):t('acc.schedOff')}</button></td><td><button class="btn-sm btn danger" onclick="deleteAccount('${x.id}')">${t('btn.delete')}</button></td></tr>`;
         }).join(''):'<tr><td colspan="6" class="empty">'+t('state.noAccountsMatch')+'</td></tr>';
       }
       async function loadAccounts(){
@@ -3234,7 +3330,7 @@ return msg;
             <button class="btn-sm btn" onclick="editKey('${x.id}','${x.name.replace(/'/g,"\\'")}')">${t('common.edit')}</button>
             <button class="btn-sm btn ${x.revoked?'success':'danger'}" onclick="toggleKey('${x.id}',${x.revoked})">${x.revoked?t('state.enable'):t('state.disable')}</button>
             <button class="btn-sm btn danger" onclick="revokeKey('${x.id}')">${t('btn.delete')}</button>
-          </td></tr>`).join(''):'<tr><td colspan="6" class="empty">No API keys</td></tr>';
+          </td></tr>`).join(''):'<tr><td colspan="6" class="empty">'+t('state.noKeys')+'</td></tr>';
         }catch(e){$('keyRows').innerHTML=`<tr><td colspan="6" class="empty">${e.message}</td></tr>`;}
       }
 
@@ -3532,6 +3628,68 @@ document.addEventListener('i18n:locale',()=>{try{const b=document.querySelector(
       }
 
       function openConversation(id){window.open('/conversation?id='+encodeURIComponent(id),'_blank','noopener');}
+
+      /* ---- conversation whitelist card (batch F) ---- */
+      async function loadWhitelist(){
+        try{
+          const d=await api('/api/conversations/whitelist');
+          const list=d.whitelist||[];
+          $('whitelistRows').innerHTML=list.length?list.map(id=>`<tr><td><code>${esc(id)}</code></td><td><button class="btn-sm btn danger" onclick="removeWhitelist('${esc(id)}')">${t('btn.delete')}</button></td></tr>`).join(''):'<tr><td colspan="2" class="empty">'+t('wl.none')+'</td></tr>';
+        }catch(e){$('whitelistRows').innerHTML=`<tr><td colspan="2" class="empty">${esc(e.message)}</td></tr>`;}
+      }
+      async function addWhitelist(){
+        const v=$('wlInput').value.trim();
+        if(!v)return;
+        try{
+          await api('/api/conversations/whitelist',{method:'POST',body:JSON.stringify({action:'add',ids:[v]})});
+          $('wlInput').value='';
+          showNotice(t('mem.saved'),'success');
+          loadWhitelist();
+        }catch(e){showNotice(trBackend(e.message),'error');}
+      }
+      async function removeWhitelist(id){
+        if(!confirm(t('wl.confirmRemove')))return;
+        try{
+          await api('/api/conversations/whitelist',{method:'POST',body:JSON.stringify({action:'remove',ids:[id]})});
+          showNotice(t('state.deleted'),'success');
+          loadWhitelist();
+        }catch(e){showNotice(trBackend(e.message),'error');}
+      }
+
+      /* ---- M365 memory card (batch F) ---- */
+      function memText(v){return typeof v==='string'?v:JSON.stringify(v,null,2);}
+      async function loadMemoryFlags(){
+        try{$('memFlagsJson').value=memText(await api('/api/admin/memory/flags'));}
+        catch(e){$('memFlagsJson').value='';showNotice(trBackend(e.message||e),'error');}
+      }
+      async function saveMemoryFlags(){
+        try{
+          JSON.parse($('memFlagsJson').value);
+          await api('/api/admin/memory/flags',{method:'PATCH',body:$('memFlagsJson').value});
+          showNotice(t('mem.saved'),'success');
+        }catch(e){showNotice(trBackend(e.message||e),'error');}
+      }
+      async function loadMemoryInstructions(){
+        try{$('memInstructionsJson').value=memText(await api('/api/admin/memory/instructions'));}
+        catch(e){$('memInstructionsJson').value='';showNotice(trBackend(e.message||e),'error');}
+      }
+      async function saveMemoryInstructions(){
+        try{
+          JSON.parse($('memInstructionsJson').value);
+          await api('/api/admin/memory/instructions',{method:'PUT',body:$('memInstructionsJson').value});
+          showNotice(t('mem.saved'),'success');
+        }catch(e){showNotice(trBackend(e.message||e),'error');}
+      }
+      async function deleteMemoryInstruction(){
+        const id=$('memInstructionId').value.trim();
+        if(!id)return;
+        if(!confirm(t('mem.confirmDelete')))return;
+        try{
+          await api('/api/admin/memory/instructions/delete',{method:'POST',body:JSON.stringify({id})});
+          showNotice(t('state.deleted'),'success');
+          loadMemoryInstructions();
+        }catch(e){showNotice(trBackend(e.message||e),'error');}
+      }
 
       function termOpen(title){$('termTitle').textContent=title;$('termBody').innerHTML='';$('termBox').style.display='block';}
       function termLine(msg,cls){const d=document.createElement('div');if(cls)d.className=cls;d.textContent='> '+msg;$('termBody').appendChild(d);$('termBody').scrollTop=$('termBody').scrollHeight;}

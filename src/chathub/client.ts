@@ -270,7 +270,7 @@ export async function chat(
         handshakeDone = true;
         try {
           ws.send(
-            chatPayload(req.text, sessionId, conversationId, requestId, tone, firstTurn, attachments)
+            chatPayload(req.text, sessionId, conversationId, requestId, tone, firstTurn, attachments, req)
           );
         } catch (e) {
           finish(e);

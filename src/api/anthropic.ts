@@ -408,6 +408,7 @@ async function streamAnthropicMessages(ctx: HandlerCtx, body: AnthropicRequest):
   const hasTools = prepared.toolMaps.length > 0;
   const model = body.model || DEFAULT_MODEL;
   const id = "msg_" + uuid();
+  const releaseAcc = accRes.release;
 
   const { readable, writable } = new TransformStream<Uint8Array>();
   const writer = writable.getWriter();
@@ -610,6 +611,8 @@ async function streamAnthropicMessages(ctx: HandlerCtx, body: AnthropicRequest):
         /* writer already closed */
       }
       await writer.close();
+    } finally {
+      await releaseAcc?.();
     }
   })();
   ctx.waitUntil(work);

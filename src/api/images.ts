@@ -38,13 +38,15 @@ async function designerAccessToken(env: import("../env").Env, acc: AccountToken)
   if (!acc.refreshToken || acc.refreshToken.trim() === "") {
     throw new Error("account has no refresh token for Designer image download");
   }
-  const clientId = acc.clientId || oauthConfig(env).clientId;
+  const { effectiveOAuthConfig } = await import("../env");
+  const cfg = await effectiveOAuthConfig(env);
+  const clientId = acc.clientId || cfg.clientId;
   const form = new URLSearchParams();
   form.set("client_id", clientId);
   form.set("grant_type", "refresh_token");
   form.set("refresh_token", acc.refreshToken);
   form.set("scope", DESIGNER_SCOPE);
-  const resp = await fetch(oauthConfig(env).tokenEndpoint, {
+  const resp = await fetch(cfg.tokenEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: form.toString(),

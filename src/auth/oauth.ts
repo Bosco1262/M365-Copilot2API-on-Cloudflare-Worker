@@ -1,6 +1,6 @@
 // OAuth helpers (port of internal/auth: pkce.go, token.go subset).
 
-import { oauthConfig, type Env } from "../env";
+import { effectiveOAuthConfig, type Env } from "../env";
 import type { TokenSet } from "../types";
 import { firstNonEmpty, randomHex, sha256B64Url } from "../util";
 
@@ -45,7 +45,7 @@ export async function authorizationURL(
   state: string,
   challenge: string
 ): Promise<{ url: string; redirectUri: string }> {
-  const cfg = oauthConfig(env);
+  const cfg = await effectiveOAuthConfig(env);
   const q = new URLSearchParams();
   q.set("client_id", cfg.clientId);
   q.set("response_type", "code");
@@ -88,7 +88,7 @@ export async function exchangeCode(
   verifier: string,
   redirectUri: string
 ): Promise<TokenSet> {
-  const cfg = oauthConfig(env);
+  const cfg = await effectiveOAuthConfig(env);
   const form = new URLSearchParams();
   form.set("client_id", cfg.clientId);
   form.set("grant_type", "authorization_code");
@@ -100,7 +100,7 @@ export async function exchangeCode(
 }
 
 export async function ropcToken(env: Env, username: string, password: string): Promise<TokenSet> {
-  const cfg = oauthConfig(env);
+  const cfg = await effectiveOAuthConfig(env);
   const form = new URLSearchParams();
   form.set("client_id", cfg.clientId);
   form.set("grant_type", "password");

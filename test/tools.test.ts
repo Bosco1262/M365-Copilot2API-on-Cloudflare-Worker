@@ -7,6 +7,7 @@ import {
   nativeToolCalls,
   parseModelToolDecision,
   toolChoiceAllows,
+  toolUseInstructions,
   validateDetectedToolCalls,
   buildToolResponse,
 } from "../src/pipeline/tools";
@@ -123,9 +124,9 @@ describe("extractM365ToolCalls / nativeToolCalls", () => {
     const events = [
       { type: 1, target: "update", arguments: [{ messages: [{ pluginName: "read_file", args: { path: "/x" } }] }] },
     ];
-    const calls = nativeToolCalls(events, [{ name: "read_file" }]);
+    const calls = nativeToolCalls(events, new Set(["read_file"]));
     expect(calls).toHaveLength(1);
-    expect(nativeToolCalls(events, [{ name: "other" }])).toHaveLength(0);
+    expect(nativeToolCalls(events, new Set(["other"]))).toHaveLength(0);
   });
 });
 
@@ -178,5 +179,23 @@ describe("buildToolResponse", () => {
 
   it("allowedToolNames collects declared names", () => {
     expect([...allowedToolNames(TOOLS)].sort()).toEqual(["bash", "read_file"]);
+  });
+});
+
+describe("toolUseInstructions", () => {
+  it("lists tool schemas and the fence protocol", () => {
+    const block = toolUseInstructions(TOOLS);
+    expect(block).toContain("bash");
+    expect(block).toContain("read_file");
+    expect(block).toContain('"parameters"');
+    expect(block).toContain("```tool_name");
+  });
+
+  it("emitted fences per the protocol are detected by fencedToolCalls", () => {
+    const reply = "Let me check that for you.\n```bash\nls\n```";
+    const calls = fencedToolCalls(reply, TOOLS, "auto");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("bash");
+    expect(JSON.parse(calls[0].arguments)).toEqual({ command: "ls" });
   });
 });

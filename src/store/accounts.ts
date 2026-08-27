@@ -5,6 +5,7 @@ import { firstNonEmpty, nowIso } from "../util";
 import { oauthConfig, type Env } from "../env";
 import { OAuthError } from "../auth/oauth";
 import { getJSON, putJSON } from "../kv";
+import { coordMutexAcquire, coordMutexRelease, coordNextAccountID } from "../do/coordination";
 
 interface AccountsDoc {
   accounts: AccountToken[];
@@ -30,11 +31,21 @@ async function loadDoc(env: Env): Promise<AccountsDoc> {
   return (await getJSON<AccountsDoc>(env["m365-copilot2api_KV"], KEY)) ?? emptyDoc();
 }
 
-// Round-robin over all accounts (port of Store.Next).
+// Round-robin over all accounts (port of Store.Next). With the coordination
+// DO bound the cursor lives in the DO (atomic across isolates) and the KV
+// accounts document is no longer rewritten on every rotation.
 export async function nextAccount(env: Env): Promise<AccountToken | null> {
   const doc = await loadDoc(env);
   const n = doc.accounts.length;
   if (n === 0) return null;
+  const picked = await coordNextAccountID(
+    env,
+    doc.accounts.map((a) => a.id)
+  );
+  if (picked !== null) {
+    const idx = Math.max(0, doc.accounts.findIndex((a) => a.id === picked));
+    return doc.accounts[idx];
+  }
   const acc = doc.accounts[doc.nextIdx % n];
   doc.nextIdx = (doc.nextIdx + 1) % n;
   await saveDoc(env, doc); // persist rotation; cheap and keeps behavior stable
@@ -132,9 +143,18 @@ export async function updateRefreshToken(env: Env, id: string, refreshToken: str
 
 // In-flight refresh coalescing (per isolate). AAD refresh tokens are
 // single-use; concurrent EnsureValid calls for the same account must not each
-// redeem one. Cross-isolate races remain possible but are unlikely for the
-// single-operator deployments this Worker targets.
+// redeem one. With the coordination DO bound, a named mutex additionally
+// serialises the redeeming across isolates; without it only the local
+// coalescing below applies (cross-isolate races remain possible but are
+// unlikely for the single-operator deployments this Worker targets).
 const inflight = new Map<string, Promise<{ acc: AccountToken; err: string | null }>>();
+
+const REFRESH_MUTEX_TTL_MS = 30_000;
+const REFRESH_REMOTE_WAIT_MS = 15_000;
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 export async function ensureValid(env: Env, id: string): Promise<AccountToken> {
   const accounts = await listAccounts(env);
@@ -147,20 +167,43 @@ export async function ensureValid(env: Env, id: string): Promise<AccountToken> {
     throw new Error("token_expired: refresh token missing or expired");
   }
   let flight = inflight.get(found.id);
-  if (!flight) {
-    flight = performRefresh(env, found);
-    inflight.set(found.id, flight);
-    try {
-      const { acc, err } = await flight;
-      if (err) throw new Error(err);
-      return acc;
-    } finally {
-      inflight.delete(found.id);
-    }
+  if (flight) {
+    const { acc, err } = await flight;
+    if (err) throw new Error(err);
+    return acc;
   }
-  const { acc, err } = await flight;
-  if (err) throw new Error(err);
-  return acc;
+
+  // Cross-isolate single-flight when the coordination DO is bound.
+  const muxKey = "refresh:" + found.id;
+  const mux = await coordMutexAcquire(env, muxKey, REFRESH_MUTEX_TTL_MS);
+  if (mux && !mux.ok) {
+    // Another isolate is redeeming the refresh token right now: wait for its
+    // result to land in KV instead of burning a second single-use token.
+    const deadline = Date.now() + REFRESH_REMOTE_WAIT_MS;
+    while (Date.now() < deadline) {
+      await sleepMs(400);
+      const cur = await getAccount(env, found.id);
+      if (cur && tokenValid(cur)) return cur;
+      const local = inflight.get(found.id);
+      if (local) {
+        const { acc, err } = await local;
+        if (err) throw new Error(err);
+        return acc;
+      }
+    }
+    // Still stale after the wait — fall through and refresh ourselves.
+  }
+
+  flight = performRefresh(env, found);
+  inflight.set(found.id, flight);
+  try {
+    const { acc, err } = await flight;
+    if (err) throw new Error(err);
+    return acc;
+  } finally {
+    inflight.delete(found.id);
+    if (mux?.ok && mux.token) await coordMutexRelease(env, muxKey, mux.token);
+  }
 }
 
 async function markStatus(env: Env, id: string, status: string): Promise<void> {

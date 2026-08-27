@@ -17,6 +17,17 @@ function bucketKey(d: Date): string {
 }
 
 export async function recordUsage(env: Env, rec: UsageRecord): Promise<void> {
+  if (env.DB) {
+    try {
+      await env.DB
+        .prepare("INSERT INTO usage_events (ts, api_key_prefix, model, json) VALUES (?, ?, ?, ?)")
+        .bind(rec.time, rec.api_key_prefix ?? "", rec.model ?? "", JSON.stringify(rec))
+        .run();
+      return;
+    } catch (e) {
+      console.warn("[usage] D1 insert failed:", e instanceof Error ? e.message : e);
+    }
+  }
   const key = bucketKey(new Date(rec.time));
   const arr = (await getJSON<UsageRecord[]>(env["m365-copilot2api_KV"], key)) ?? [];
   arr.push(rec);
@@ -35,6 +46,31 @@ interface UsageTrendPoint {
 }
 
 async function loadWindow(env: Env, days: number): Promise<UsageRecord[]> {
+  if (env.DB) {
+    const cutoffIso =
+      days > 0 ? new Date(Date.now() - days * 86400_000).toISOString() : "1970-01-01T00:00:00Z";
+    const res = await env.DB
+      .prepare("SELECT json FROM usage_events WHERE ts >= ? ORDER BY ts ASC LIMIT 50000")
+      .bind(cutoffIso)
+      .all<{ json: string }>();
+    const out: UsageRecord[] = [];
+    for (const row of res.results) {
+      try {
+        out.push(JSON.parse(row.json) as UsageRecord);
+      } catch {}
+    }
+    return out;
+  }
+  return loadWindowKV(env, days);
+}
+
+// Legacy KV day-bucket reader (used when no D1 binding is configured, and by
+// the one-shot KV→D1 backfill endpoint).
+export async function listLegacyRecords(env: Env, days: number): Promise<UsageRecord[]> {
+  return loadWindowKV(env, days);
+}
+
+async function loadWindowKV(env: Env, days: number): Promise<UsageRecord[]> {
   // list keys with prefix usage/ (lexicographic == chronological)
   let keys: string[] = [];
   let cursor: string | undefined;

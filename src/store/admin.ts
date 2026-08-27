@@ -105,9 +105,9 @@ export async function verifyAdminPassword(env: Env, password: string): Promise<{
 }
 
 export function validNewAdminPassword(p: string): string | null {
-  if (p === DEFAULT_ADMIN_PASSWORD) return "new password must not be the default password";
-  if (p.length < 6) return "new password must be at least 6 characters";
-  if (p.length > 256) return "new password is too long";
+  if (p === DEFAULT_ADMIN_PASSWORD) return "新密码不能与默认密码相同";
+  if (p.length < 6) return "新密码长度至少为 6 位";
+  if (p.length > 256) return "新密码过长";
   return null;
 }
 
