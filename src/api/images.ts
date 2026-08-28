@@ -192,7 +192,7 @@ async function runGeneration(
     ctx.waitUntil(markCall(ctx.env, acc.id).catch(() => {}));
     res = await chathubChat(
       { accessToken: acc.accessToken, oid: acc.oid, tid: acc.tid },
-      { text: prompt, tone: "magic", attachments },
+      { text: prompt, tone: "Magic", attachments },
       {},
       { timeoutMs: settings.imageTimeoutSeconds * 1000 }
     );

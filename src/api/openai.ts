@@ -814,7 +814,7 @@ async function markFailureAfterConfirm(ctx: HandlerCtx, acc: AccountToken, err: 
       { accessToken: acc.accessToken, oid: acc.oid ?? "", tid: acc.tid ?? "", licenseType: settings.licenseType, scenario: settings.scenario },
       {
         text: RATE_LIMIT_PROBE_PROMPT,
-        tone: "magic",
+        tone: "Magic",
         featureFlags: settings.featureFlags ?? { memoryV2: true },
         licenseType: settings.licenseType,
         scenario: settings.scenario,
@@ -1066,9 +1066,9 @@ export async function runCompletionsCore(
     try {
       res = await chatCall(ctx, prepared, acc, {});
     } catch (err) {
-      if (isEmptyCompletion(err) && prepared.tone !== "magic") {
+      if (isEmptyCompletion(err) && prepared.tone !== "Magic") {
         try {
-          res = await chatCall(ctx, prepared, acc, { toneOverride: "magic" });
+          res = await chatCall(ctx, prepared, acc, { toneOverride: "Magic" });
         } catch {
           throw err;
         }

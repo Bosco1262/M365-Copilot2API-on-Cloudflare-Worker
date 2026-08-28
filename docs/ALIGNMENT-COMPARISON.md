@@ -66,7 +66,7 @@ v0.6.0 (99872ace) ── 1b1d53e ── 0ffe0f7 ── e9250a6 ← 本地副本�
 | F8 | 流式 router 预调用 | server.go:1810-1881 | streamChatCompletions 预调用块（D1） | ✅ 对齐 |
 | F9 | 流式 holdback 尾缓冲 | 3-rune | holdback.ts RUNE_HOLDBACK=3（D2） | ✅ 对齐 |
 | F10 | failover 守卫 | 仅限流/鉴权 + 流式已流守卫 + resolver 会话清除 | canFailover + emittedAny（A1/B7） | ✅ 对齐 |
-| F11 | tone=magic 空完成兜底 | server.go:2467-2475 | openai.ts | ✅ 对齐 |
+| F11 | tone=Magic 空完成兜底 | server.go:2467-2475 | openai.ts | ✅ 对齐 |
 | F12 | 无效工具 repair | 流式/非流式 REPAIR RULE | 流式+非流式 repair（A5） | ✅ 对齐 |
 | F13 | 图片多模态回传 | `res.Images` → image_url data URI（上游 images.go 无 SSRF 校验） | openai.ts downloadImageAsDataURI（两端一致无校验） | ✅ 对齐 |
 | F14 | 图片额度/内容策略标记 | ErrImageLimit / ErrOffensiveContent → MarkImageLimited | ImageLimitError/ContentPolicyError + markImageLimited（A7） | ✅ 对齐 |

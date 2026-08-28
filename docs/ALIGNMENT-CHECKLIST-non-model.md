@@ -162,3 +162,4 @@
 4. 每次部署后建议跑 `npm run check`（typecheck + vitest + i18n + wrangler dry-run）做回归
 5. **已落地（2026-08-27）**：B1 并发预筛+动态 Retry-After、B2 偏好并发检查、B3 全分类冷却+全局熔断+quotaAttempts+rateLimitCooldownSeconds、B6 并发满不进候选、B7 failover 原账号冷却、B8 MarkCall+视图字段+token-health 格式
 6. **已核实（2026-08-27）**：C1-C6 存储与状态逐项复核——C4 KV TTL 实为 48h（清单修正）、C5 migrations 已扩至 0004（清单修正）、C3 D1 分支 usage 清理缺口（**已修复**：usage.ts cleanupOld 挂 */30 cron，DELETE 90 天前）；默认映射表 gpt-image-2 tone `magic` → `Magic`（对齐上游 codex_catalog.go 白名单，KNOWN_UPSTREAM_TONES 同步）
+7. **已落地（2026-08-28）**：官方确认 ChatHub tone 为 `Magic`，全库统一大写（images.ts 图片生成、openai.ts 限流探测/empty 兜底、catalog.ts modelTone、test 断言、docs 引用同步；dist 需重新构建）——超前于上游 web 层（仍小写）

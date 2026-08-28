@@ -52,7 +52,7 @@ export function modelTone(model: string): string {
     case "gpt-5.3-think-deeper":
       return "Gpt_5_3_Chat";
     default:
-      return "magic";
+      return "Magic";
   }
 }
 

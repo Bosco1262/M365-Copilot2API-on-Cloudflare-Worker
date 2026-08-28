@@ -8,7 +8,8 @@
 > 状态图例：✅ 对齐｜⚠️ 部分/简化｜❌ 未做｜[平台] Workers 限制｜[用户选择] 有意保留｜[死代码] 上游未使用
 
 > **实施记录（同日追加）**：按本报告完成两项落地（2026-08-27，待 typecheck/vitest 回归）：
-> - **默认映射表 tone 大小写**：`DEFAULT_MODEL_MAPPINGS` 中 gpt-image-2 的 `upstreamTone` 由 `magic` 改为 `Magic`，`KNOWN_UPSTREAM_TONES` 同步（对齐上游 `codex_catalog.go:87` 白名单与 `chathub/client.go:164` 的 `defaultTone = "Magic"`）；images/探测/fallback 路径的小写 `magic`（对齐上游 `images.go:104`、`server.go:115/2467`）有意保留。
+> - **默认映射表 tone 大小写**：`DEFAULT_MODEL_MAPPINGS` 中 gpt-image-2 的 `upstreamTone` 由 `magic` 改为 `Magic`，`KNOWN_UPSTREAM_TONES` 同步（对齐上游 `codex_catalog.go:87` 白名单与 `chathub/client.go:164` 的 `defaultTone = "Magic"`）。
+> - **全库 tone 统一（2026-08-28 追加）**：用户确认官方 tone 即为 `Magic`，将剩余小写 `magic` 全部同步为大写——`images.ts:195`（图片生成）、`openai.ts:817`（限流探测）、`openai.ts:1069/1071`（empty 兜底判断+重试，原判断对 gpt-image-2 的 Magic 映射已失效）、`catalog.ts:55`（modelTone 死代码）；测试断言（chathub/pipeline）同步，`dist/` 需重新构建。**超前于上游**：上游 web 层（`images.go:104`、`server.go:115/1164/2467-2471`）仍为小写。
 > - **C3 D1 usage 清理修复**：`src/store/usage.ts` 新增 `cleanupOld(env, days=90)`（DELETE `usage_events` 中 `ts < now-90d`），挂载到 `src/index.ts` 的 `*/30` cron（debug-records 清理之后）；未绑 D1 时为空操作（KV 日桶靠 90 天 TTL 自过期）。清单 C3 待修项闭环，L 部分同步更新。
 
 ---

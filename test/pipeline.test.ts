@@ -79,7 +79,7 @@ describe("tone routing", () => {
   it("maps explicit reasoning aliases verbatim", () => {
     expect(modelTone("gpt-5.5-reasoning")).toBe("Gpt_5_5_Reasoning");
     expect(modelTone("claude-sonnet")).toBe("Claude_Sonnet");
-    expect(modelTone("unknown-model")).toBe("magic");
+    expect(modelTone("unknown-model")).toBe("Magic");
   });
 
   it("uses configured mapping first", () => {

@@ -149,7 +149,7 @@
 | # | 差异 | 上游（Go） | 当前（TS） |
 |---|---|---|---|
 | B1 | **variants 长度** | 62 项（`client.go:173`），多出 21 项：`feature.EnableImageGenInsufficientTokensThrottled`、`feature.EnableImageGenSystemCapacityThrottled`、`feature.EnableConversationShareApis`、`IsCitationsReferencesOutputEnabled`、`enableDeltaStreamingForReferences`、`enableIncludeReferencesInDeltaResponse`、`enablereferencesforagents`、`EnableMergingPureDeltas`、`EnableRemoveStreamingMode`、`EnableCodeInterpreterConversion`、`agt_module_attr_enableReferencesForCodeInterpreter`、`agt_module_enableCodeInterpreterHallucinatedUrlFilter`、`SingletonEnvOn`、`cdxenablefccinmainline`、`EnableComposeWidget`、`EnableContentApiandDocTypeHtmlInRichAnswers`、`cdxgrounding_api_v2_rich_web_answers_reference_bottom_force`、`cdxenablerenderforisocomp`、`EnableSkipRehydrationForSpeCIdImages`、`EnablePersonalization`、`EnableBase64DataInMessageAnnotations`、`EnableSkipEmittingMessageOnFlush`、`EnableRemoveEmptySourceAttributions`、`agt_researcheragent_enableMemoryRead` | 41 项，结尾 `Agt_bizchat_enableGpt5ForHelix`（`protocol.ts:21`） | 引用（references）、图片生成节流、代码解释器转换等特性在 TS 网关的会话中未启用 |
-| B2 | **默认 tone** | `defaultTone = "Magic"`（大写 M，`client.go:164`） | `DEFAULT_TONE = "magic"`（全小写，`protocol.ts:11`） | **协议敏感**：小写 tone 可能不被 M365 识别（上游 tone 值大小写敏感），需实测验证 |
+| B2 | **默认 tone** | `defaultTone = "Magic"`（大写 M，`client.go:164`） | `DEFAULT_TONE = "Magic"`（大写，`protocol.ts:15`） | **已解决（2026-08-28）**：官方确认 tone 为 `Magic`，全库统一大写（含图片生成/限流探测/empty 兜底/modelTone） |
 | B3 | **WS URL 参数** | 多 `XRoutingParameterSessionKey`、`isEdu=false`、`disableMemory=1`（`client.go:1129-1162`） | 无这三项（`protocol.ts:105-121`） | 路由亲和/教育租户/内存开关行为差异 |
 | B4 | **locale/tz/deviceOS** | 从请求头 `X-M365-Locale`/`Accept-Language`/`X-M365-Market`/`X-M365-TimeZone`/`X-M365-DeviceOS` 解析（`server.go:2900-2940`），默认 en-us/UTC/Windows | 硬编码 `zh-cn` / `Asia/Shanghai` / +8，无 deviceOS（`protocol.ts:143`） | 非中文用户收到中文 locale 载荷；时区硬编码 +8 |
 | B5 | **optionsSets** | 42 项，含 `cwc_code_interpreter` 系列 6 项、`flux_v3_references*` 3 项、`rich_responses`、`add_filestore_filetype` 等 + 8 个 FeatureFlags 开关（DeepWork/ComputerUse/RealtimeVoice/SystemPromptOverride/DesignerImageGen4o/CodeCanvas/SydneyReconnect，`client.go:1421-1478`） | 14 项精简集，仅 memoryV2 开关（`protocol.ts:178-196`） | 代码解释器、实时语音、深度工作、图像维度等上游特性在 TS 载荷中不可用 |
@@ -217,7 +217,7 @@
 3. **A4 原生工具事件**：`ChatHandlers` 增加 `onTool` 回调，`client.ts` update 帧解析时调 `extractToolEvents`（`tools.ts:290` 已有实现，只是未接入 client 层）。
 
 ### 应当处理（P1，协议一致性与特性保真）
-4. **B2 tone 大小写**：确认 M365 是否接受小写 `magic`；如上游实测有效则保持，否则改为 `Magic`。建议在桌面端实测。
+4. **B2 tone 大小写**：~~确认 M365 是否接受小写 `magic`；如上游实测有效则保持，否则改为 `Magic`。建议在桌面端实测。~~ **已解决（2026-08-28）**：官方确认 tone 为 `Magic`，`protocol.ts`/默认映射表/白名单/图片/探测/兜底/modelTone 全库统一大写。
 5. **B1 variants / B5 optionsSets / B8 allowedMessageTypes**：对齐上游 62 项 variants 与关键 optionsSets（至少补 references/code_interpreter 相关项），feature flags 按设置透传。
 6. **A6 图片回传**：非流式响应把 `res.images` 转 image_url 块（`downloadImageAsDataURIWithToken` 的 Workers 版）。
 7. **A5 repair**：流式无效工具时补 router repair 调用。

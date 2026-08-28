@@ -36,7 +36,7 @@ describe("buildWSURL", () => {
 
 describe("chatPayload", () => {
   it("emits chat invocation frame plus metrics frame separated by RS", () => {
-    const raw = chatPayload("hi", "s1", "c1", "r1", "magic", true);
+    const raw = chatPayload("hi", "s1", "c1", "r1", "Magic", true);
     const parts = raw.split(RS).filter((x) => x.trim() !== "");
     expect(parts).toHaveLength(2);
     const chat = JSON.parse(parts[0]);
@@ -50,7 +50,7 @@ describe("chatPayload", () => {
     expect(arg.conversationId).toBeUndefined();
     // HAR evidence: isStartOfSession is always false even on the first turn.
     expect(arg.isStartOfSession).toBe(false);
-    expect(arg.tone).toBe("magic");
+    expect(arg.tone).toBe("Magic");
     expect(arg.source).toBe("officeweb");
     expect(arg.isSbsSupported).toBe(true);
     expect(arg.renderReferencesBehindEOS).toBe(true);
