@@ -1,5 +1,9 @@
 # 存储设计复核：KV / D1 / DO 与回退设计在 Cloudflare 免费层的可行性
 
+> **⚠️ 状态：已被取代（2026-08-30）**。本文的配额基线含 4 处错误（最重要：DO 空闲可休眠不计费，"常驻吃 83% 时长"结论不成立）、1 项口径偏差与 5 项遗漏。
+> 逐条复核见 `STORAGE-FREE-TIER-REVIEW-VERIFICATION-2026-08-30.md`；修正后的配额基线、资源分布与实施计划见 `STORAGE-FREE-TIER-PLAN-2026-08-30.md`（计划部分已全部执行完毕，执行状态清单见 `STORAGE-FREE-TIER-EXECUTION-STATUS-2026-08-31.md`）。
+> 本文保留作为历史记录，其中"约 150 次/天"的起点基线仍然有效。
+
 日期：2026-08-28
 范围：`wrangler.jsonc`、`migrations/*`、`src/store/*`、`src/do/*`、`src/pipeline/{account,resolver,cleanup}.ts`、`src/api/openai.ts`、`src/index.ts`
 前置文档：`docs/storage-audit-report.md`（一致性/并发视角，未涉及配额）

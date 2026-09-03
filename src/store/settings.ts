@@ -179,17 +179,31 @@ export function defaultSettings(env: Env): RuntimeSettings {
 
 const KEY = "settings";
 
+// Storage review P0-3: getSettings used to hit KV five times per request
+// (prepareCore, account resolution, concurrency check, ...). Settings change
+// rarely, so cache per KV-namespace for a short window. The cache is keyed by
+// the namespace OBJECT (WeakMap), so tests that build fresh envs never see
+// stale values; saveSettings invalidates its own namespace immediately.
+// Cross-isolate staleness after an admin save is bounded by the TTL (30s).
+const SETTINGS_CACHE_TTL_MS = 30_000;
+const settingsCache = new WeakMap<object, { value: RuntimeSettings; expiresAt: number }>();
+
 export async function getSettings(env: Env): Promise<RuntimeSettings> {
+  const ns = env["m365-copilot2api_KV"] as unknown as object;
+  const hit = settingsCache.get(ns);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
   const defaults = defaultSettings(env);
   const stored = await getJSON<Partial<RuntimeSettings>>(env["m365-copilot2api_KV"], KEY);
-  if (!stored) return defaults;
-  return { ...defaults, ...stored };
+  const value: RuntimeSettings = stored ? { ...defaults, ...stored } : defaults;
+  settingsCache.set(ns, { value, expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS });
+  return value;
 }
 
 export async function saveSettings(env: Env, v: RuntimeSettings): Promise<string | null> {
   const err = validateSettings(v);
   if (err) return err;
   await putJSON(env["m365-copilot2api_KV"], KEY, v);
+  settingsCache.delete(env["m365-copilot2api_KV"] as unknown as object);
   return null;
 }
 

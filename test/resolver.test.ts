@@ -8,6 +8,8 @@ import {
   bindSession,
   unbindByConversation,
   listResolverSessions,
+  countResolverSessions,
+  listResolverIndex,
 } from "../src/pipeline/resolver";
 import type { OaiMsg } from "../src/pipeline/prompt";
 import { MockKV } from "./helpers/mockkv";
@@ -164,5 +166,36 @@ describe("resolveSession / bindSession flow", () => {
     });
     const all = await listResolverSessions(env);
     expect(all.find((s) => s.sessionId === "capped")?.contextHistory?.length).toBe(512);
+  });
+});
+
+describe("countResolverSessions / listResolverIndex (storage review P0-1)", () => {
+  it("counts and lists index entries without any blob reads", async () => {
+    const fresh = {
+      "m365-copilot2api_KV": new MockKV() as unknown as KVNamespace,
+    } as unknown as import("../src/env").Env;
+    expect(await countResolverSessions(fresh)).toBe(0);
+    expect(await listResolverIndex(fresh)).toEqual([]);
+
+    await bindSession(fresh, {
+      sessionId: "idx-1",
+      conversationId: "conv-idx-1",
+      accountId: "a",
+      messages: [msg("user", "x")],
+    });
+    await bindSession(fresh, {
+      sessionId: "idx-2",
+      conversationId: "conv-idx-2",
+      accountId: "a",
+      messages: [msg("user", "y")],
+    });
+
+    expect(await countResolverSessions(fresh)).toBe(2);
+    const entries = await listResolverIndex(fresh);
+    expect(entries.map((e) => e.conversationId).sort()).toEqual(["conv-idx-1", "conv-idx-2"]);
+    // Index entries must stay lightweight: no transcripts leak into them.
+    for (const e of entries) {
+      expect(e).not.toHaveProperty("contextHistory");
+    }
   });
 });

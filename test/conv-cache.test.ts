@@ -198,6 +198,111 @@ describe("prepareCore convCache integration", () => {
     expect(p.prepared.answerPrompt).toContain("first question"); // FULL prompt sent
     expect(p.prepared.answerPrompt).toContain("[tool result id=call_1]");
   });
+
+  it("drops history image attachments on an incremental hit (image replay bug)", async () => {
+    const env = makeEnv();
+    const IMG1 = {
+      role: "user",
+      content: [
+        { type: "text", text: "what is in this picture?" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAAfirst" } },
+      ],
+    };
+    const body1 = { model: "gpt-5.2", messages: [SYS, IMG1] };
+    const p1 = await prepareCore(makeCtx(env, body1), body1);
+    expect(p1.ok).toBe(true);
+    if (!p1.ok) return;
+    expect(p1.prepared.attachments).toHaveLength(1); // first turn uploads the image
+    await recordFinalize(
+      makeCtx(env, {}),
+      p1.prepared,
+      { id: "accX", accessToken: "", expiresAt: "" } as never,
+      {
+        text: "a cat",
+        reasoning: "",
+        conversationId: "conv-img",
+        sessionId: "sess-img",
+        requestId: "r",
+        rawResult: "",
+        events: [],
+        images: [],
+      },
+      { model: "gpt-5.2", endpoint: "/v1/chat/completions", stream: false, sentPrompt: p1.prepared.answerPrompt, startedAt: Date.now() }
+    );
+
+    // Follow-up turn WITHOUT any image: the cached turn's image must NOT be
+    // re-uploaded as a new attachment on the incremental request.
+    const body2 = {
+      model: "gpt-5.2",
+      messages: [
+        SYS,
+        IMG1,
+        { role: "assistant", content: "a cat" },
+        { role: "user", content: "follow-up?" },
+      ],
+    };
+    const p2 = await prepareCore(makeCtx(env, body2), body2);
+    expect(p2.ok).toBe(true);
+    if (!p2.ok) return;
+    expect(p2.prepared.conversationID).toBe("conv-img"); // incremental hit
+    expect(p2.prepared.answerPrompt).toContain("follow-up?");
+    expect(p2.prepared.answerPrompt).not.toContain("what is in this picture?");
+    expect(p2.prepared.attachments).toHaveLength(0);
+  });
+
+  it("keeps only NEW images on an incremental hit when the follow-up carries one", async () => {
+    const env = makeEnv();
+    const IMG1 = {
+      role: "user",
+      content: [
+        { type: "text", text: "what is in this picture?" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAAfirst" } },
+      ],
+    };
+    const body1 = { model: "gpt-5.2", messages: [SYS, IMG1] };
+    const p1 = await prepareCore(makeCtx(env, body1), body1);
+    expect(p1.ok).toBe(true);
+    if (!p1.ok) return;
+    await recordFinalize(
+      makeCtx(env, {}),
+      p1.prepared,
+      { id: "accX", accessToken: "", expiresAt: "" } as never,
+      {
+        text: "a cat",
+        reasoning: "",
+        conversationId: "conv-img2",
+        sessionId: "sess-img2",
+        requestId: "r",
+        rawResult: "",
+        events: [],
+        images: [],
+      },
+      { model: "gpt-5.2", endpoint: "/v1/chat/completions", stream: false, sentPrompt: p1.prepared.answerPrompt, startedAt: Date.now() }
+    );
+
+    // Follow-up turn WITH a new image: only the new image is uploaded.
+    const body2 = {
+      model: "gpt-5.2",
+      messages: [
+        SYS,
+        IMG1,
+        { role: "assistant", content: "a cat" },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "and this one?" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,AAAAsecond" } },
+          ],
+        },
+      ],
+    };
+    const p2 = await prepareCore(makeCtx(env, body2), body2);
+    expect(p2.ok).toBe(true);
+    if (!p2.ok) return;
+    expect(p2.prepared.conversationID).toBe("conv-img2"); // incremental hit
+    expect(p2.prepared.attachments).toHaveLength(1);
+    expect(p2.prepared.attachments[0].url).toBe("data:image/png;base64,AAAAsecond");
+  });
 });
 
 describe("featureFlags memoryV2 payload gating", () => {

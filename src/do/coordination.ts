@@ -679,18 +679,25 @@ export async function coordHealthClear(env: Env): Promise<boolean | null> {
   return r?.ok ?? null;
 }
 
-/** Bumps the per-account call counter (port of accountPool.MarkCall). */
-export async function coordHealthMarkCall(env: Env, accountId: string): Promise<void> {
-  await coordAction<{ ok: boolean }>(env, "/health/mark-call", { accountId });
+/** Bumps the per-account call counter (port of accountPool.MarkCall).
+ * True/False when the DO answered, null when coordination is unbound. */
+export async function coordHealthMarkCall(env: Env, accountId: string): Promise<boolean | null> {
+  const r = await coordAction<{ ok: boolean }>(env, "/health/mark-call", { accountId });
+  return r?.ok ?? null;
 }
 
-/** Stores the latest ChatHub throttling payload for the account (best-effort). */
+/** Stores the latest ChatHub throttling payload for the account (best-effort).
+ * True/False when the DO answered, null when coordination is unbound. */
 export async function coordHealthUpdateThrottling(
   env: Env,
   accountId: string,
   throttling: unknown
-): Promise<void> {
-  await coordAction<{ ok: boolean }>(env, "/health/update-throttling", { accountId, throttling });
+): Promise<boolean | null> {
+  const r = await coordAction<{ ok: boolean }>(env, "/health/update-throttling", {
+    accountId,
+    throttling,
+  });
+  return r?.ok ?? null;
 }
 
 export function coordHealthSnapshot(env: Env): Promise<HealthSnapshot | null> {

@@ -80,12 +80,45 @@ function userSessionKey(apiKeyHash: string, user: string): string {
   return USER_SESSIONS_PREFIX + apiKeyHash + "|" + user;
 }
 
+// Storage review P1-1 (Phase 2): with the DB binding user sessions live in
+// D1 (migrations/0005_background_writes_d1.sql) — this was one of the ~4
+// per-request KV writes. KV stays as the no-D1 fallback (still read on a D1
+// miss so pre-migration entries keep working) but is no longer written on
+// the hot path. D1 has no KV-style expirations: freshness is enforced on
+// read and stale rows are pruned on a subset of writes.
+const USER_SESSION_PRUNE_EVERY = 100;
+let userSessionWritesSincePrune = 0;
+
 export async function getUserSession(
   env: Env,
   apiKeyHash: string,
   user: string
 ): Promise<UserSessionEntry | null> {
   if (!apiKeyHash || !user) return null;
+  if (env.DB) {
+    try {
+      const row = await env.DB
+        .prepare(
+          "SELECT conversation_id, session_id, account_id, last_used_at FROM user_sessions WHERE api_key_hash = ? AND user_id = ?"
+        )
+        .bind(apiKeyHash, user)
+        .first<{ conversation_id: string; session_id: string; account_id: string; last_used_at: string }>();
+      if (row) {
+        if (Date.now() - Date.parse(row.last_used_at) > USER_SESSION_TTL_MS) return null;
+        return {
+          conversationId: row.conversation_id,
+          sessionId: row.session_id,
+          accountId: row.account_id,
+          lastUsedAt: row.last_used_at,
+        };
+      }
+    } catch (e) {
+      console.warn(
+        "[user-sessions] D1 get failed, falling back to KV:",
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
   const entry = await getJSON<UserSessionEntry>(kv(env), userSessionKey(apiKeyHash, user));
   if (!entry) return null;
   if (Date.now() - Date.parse(entry.lastUsedAt) > USER_SESSION_TTL_MS) return null;
@@ -101,6 +134,34 @@ export async function putUserSession(
   accountId: string
 ): Promise<void> {
   if (!apiKeyHash || !user || !conversationId) return;
+  if (env.DB) {
+    try {
+      await env.DB
+        .prepare(`INSERT INTO user_sessions (api_key_hash, user_id, conversation_id, session_id, account_id, last_used_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(api_key_hash, user_id) DO UPDATE SET
+  conversation_id = excluded.conversation_id,
+  session_id = excluded.session_id,
+  account_id = excluded.account_id,
+  last_used_at = excluded.last_used_at`)
+        .bind(apiKeyHash, user, conversationId, sessionId, accountId, new Date().toISOString())
+        .run();
+      userSessionWritesSincePrune++;
+      if (userSessionWritesSincePrune >= USER_SESSION_PRUNE_EVERY) {
+        userSessionWritesSincePrune = 0;
+        await env.DB
+          .prepare("DELETE FROM user_sessions WHERE last_used_at < ?")
+          .bind(new Date(Date.now() - USER_SESSION_TTL_MS).toISOString())
+          .run();
+      }
+      return;
+    } catch (e) {
+      console.warn(
+        "[user-sessions] D1 upsert failed, falling back to KV:",
+        e instanceof Error ? e.message : e
+      );
+    }
+  }
   await putJSON(
     kv(env),
     userSessionKey(apiKeyHash, user),
@@ -134,6 +195,25 @@ export async function activeUserConversations(env: Env): Promise<Set<string>> {
     }
   } catch {
     /* legacy migration is best-effort */
+  }
+
+  // Storage review P1-1: with the DB binding the sweep reads the D1 table
+  // (single query, no per-key point reads); KV enumeration stays as the
+  // no-D1 fallback only.
+  if (env.DB) {
+    try {
+      const res = await env.DB
+        .prepare("SELECT DISTINCT conversation_id FROM user_sessions WHERE last_used_at >= ? LIMIT 500")
+        .bind(new Date(now - USER_SESSION_TTL_MS).toISOString())
+        .all<{ conversation_id: string }>();
+      for (const r of res.results) out.add(r.conversation_id);
+      return out;
+    } catch (e) {
+      console.warn(
+        "[user-sessions] D1 sweep failed, falling back to KV:",
+        e instanceof Error ? e.message : e
+      );
+    }
   }
 
   try {

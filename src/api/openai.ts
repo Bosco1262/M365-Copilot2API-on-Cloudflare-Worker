@@ -35,7 +35,7 @@ import {
 import {
   resolveSession,
   bindSession,
-  listResolverSessions,
+  countResolverSessions,
   clientIPFingerprint,
 } from "../pipeline/resolver";
 import { recordCacheRequest } from "../store/cacheStats";
@@ -525,7 +525,16 @@ export async function prepareCore(
         accountID = pickStr(accountID, hit.accountId);
         const inc = await flattenPromptMessages(budgetMessages.slice(hit.messageCount));
         const incPrompt = inc.prompt.trim();
-        if (incPrompt !== "") answerPrompt = incPrompt;
+        if (incPrompt !== "") {
+          answerPrompt = incPrompt;
+          // Upstream server.go:1778-1784 parity: on an incremental hit the
+          // attachments are REPLACED by the incremental slice's — otherwise
+          // the first turn's images stay in the array and get re-uploaded as
+          // new attachments on every follow-up turn, so M365 keeps answering
+          // "you uploaded the same image again".
+          attachments.length = 0;
+          attachments.push(...inc.attachments);
+        }
       }
     }
   }
@@ -552,7 +561,14 @@ export async function prepareCore(
       ) {
         const inc = await flattenPromptMessages(budgetMessages.slice(resolved.historyLen));
         const incPrompt = inc.prompt.trim();
-        if (incPrompt !== "") answerPrompt = incPrompt;
+        if (incPrompt !== "") {
+          answerPrompt = incPrompt;
+          // Upstream server.go:1740-1745 parity: same replacement rule as the
+          // convCache branch — incremental hit swaps in the incremental
+          // slice's attachments so history images are not re-uploaded.
+          attachments.length = 0;
+          attachments.push(...inc.attachments);
+        }
       }
     }
   }
@@ -879,34 +895,52 @@ export async function recordFinalize(
   res: ChatOutcome,
   opts: { model: string; endpoint: string; stream: boolean; sentPrompt: string; startedAt: number }
 ): Promise<void> {
+  // Storage review P1-5: every step here is best-effort bookkeeping — one
+  // failing write (e.g. the daily KV quota error) must not silently skip the
+  // remaining steps, which previously lost bindings, transcripts, cache
+  // write-backs and usage stats all at once.
+  const step = async (name: string, fn: () => Promise<void>): Promise<void> => {
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(`[finalize] ${name} failed:`, e instanceof Error ? e.message : e);
+    }
+  };
   const messages = prepared.messages;
+  const convCache = prepared.convCache;
+  const sessionKey = prepared.sessionKey;
+  const { user, apiKeyHash } = prepared;
   if (res.conversationId !== "") {
     const ip =
       ctx.req.headers.get("CF-Connecting-IP") ??
       ctx.req.headers.get("X-Forwarded-For")?.split(",")[0].trim() ??
       "";
     const ipFinger = await clientIPFingerprint(ip, ctx.req.headers.get("User-Agent") ?? "");
-    await bindSession(ctx.env, {
-      sessionId: res.sessionId,
-      conversationId: res.conversationId,
-      accountId: acc.id,
-      messages,
-      assistantText: res.text,
-      userField: undefined,
-      ipFingerprint: ipFinger,
-    });
-    await recordConversation(ctx.env, {
-      id: res.conversationId,
-      accountID: acc.id,
-      title: prepared.prompt.slice(0, 80),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
+    await step("bindSession", () =>
+      bindSession(ctx.env, {
+        sessionId: res.sessionId,
+        conversationId: res.conversationId,
+        accountId: acc.id,
+        messages,
+        assistantText: res.text,
+        userField: undefined,
+        ipFingerprint: ipFinger,
+      })
+    );
+    await step("recordConversation", () =>
+      recordConversation(ctx.env, {
+        id: res.conversationId,
+        accountID: acc.id,
+        title: prepared.prompt.slice(0, 80),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      })
+    );
     // Conversation detail viewer transcript (batch C): capture the current
     // turn's user prompt + assistant answer. Router planning turns are
     // skipped — their prompt/answer are synthetic tool-selection traffic.
     if (opts.sentPrompt === prepared.answerPrompt) {
-      try {
+      await step("transcript", async () => {
         const { appendChatTurn } = await import("../store/chatMessages");
         let lastUser = "";
         for (let i = messages.length - 1; i >= 0; i--) {
@@ -916,68 +950,69 @@ export async function recordFinalize(
           }
         }
         await appendChatTurn(ctx.env, res.conversationId, lastUser, res.text);
-      } catch (e) {
-        console.warn("[chat-messages] transcript append failed:", e instanceof Error ? e.message : e);
-      }
+      });
       // convCache write-back (#3): remember this conversation for the
       // key+account+model bucket so the next turn with more messages can be
       // sent incrementally.
-      if (prepared.convCache) {
-        const { putConvCache } = await import("../store/convCache");
-        await putConvCache(ctx.env, prepared.convCache.key, {
-          accountId: acc.id,
-          conversationId: res.conversationId,
-          sessionId: res.sessionId,
-          messageCount: messages.length,
-          sysHash: prepared.convCache.sysHash,
-          lastUsedAt: nowIso(),
+      if (convCache) {
+        await step("convCache", async () => {
+          const { putConvCache } = await import("../store/convCache");
+          await putConvCache(ctx.env, convCache.key, {
+            accountId: acc.id,
+            conversationId: res.conversationId,
+            sessionId: res.sessionId,
+            messageCount: messages.length,
+            sysHash: convCache.sysHash,
+            lastUsedAt: nowIso(),
+          });
         });
       }
     }
   }
-  if (prepared.sessionKey) {
-    await upsertSessionBinding(ctx.env, {
-      id: prepared.sessionKey,
-      accountID: acc.id,
-      conversationID: res.conversationId,
-      sessionID: res.sessionId,
-      title: prepared.prompt.slice(0, 80),
-      updatedAt: nowIso(),
-    });
-  }
-  if (prepared.user && prepared.apiKeyHash && res.conversationId !== "") {
-    const { putUserSession } = await import("../admin/extras");
-    await putUserSession(
-      ctx.env,
-      prepared.apiKeyHash,
-      prepared.user,
-      res.conversationId,
-      res.sessionId,
-      acc.id
+  if (sessionKey) {
+    await step("sessionBinding", () =>
+      upsertSessionBinding(ctx.env, {
+        id: sessionKey,
+        accountID: acc.id,
+        conversationID: res.conversationId,
+        sessionID: res.sessionId,
+        title: prepared.prompt.slice(0, 80),
+        updatedAt: nowIso(),
+      })
     );
   }
-  let historyTokens = 0;
-  const upper = Math.max(0, messages.length - 1);
-  for (const m of messages.slice(0, upper)) {
-    historyTokens += estimateTokens(contentToString(m.content));
+  if (user && apiKeyHash && res.conversationId !== "") {
+    await step("userSession", async () => {
+      const { putUserSession } = await import("../admin/extras");
+      await putUserSession(ctx.env, apiKeyHash, user, res.conversationId, res.sessionId, acc.id);
+    });
   }
-  const apiKeyPrefix = extractAPIKeyPrefix(ctx);
-  const pt = estimateTokens(opts.sentPrompt);
-  const ct = estimateTokens(res.text);
-  const activeSessions = (await listResolverSessions(ctx.env)).length;
-  await recordCacheRequest(ctx.env, apiKeyPrefix, historyTokens > 0, pt, historyTokens, activeSessions);
-  await recordUsage(ctx.env, {
-    time: new Date().toISOString(),
-    api_key_prefix: apiKeyPrefix,
-    account_email: acc.email,
-    model: opts.model,
-    endpoint: opts.endpoint,
-    stream: opts.stream,
-    input_tokens: pt,
-    output_tokens: ct,
-    cache_tokens: historyTokens,
-    duration_ms: Date.now() - opts.startedAt,
-    status: 200,
+  await step("usageStats", async () => {
+    let historyTokens = 0;
+    const upper = Math.max(0, messages.length - 1);
+    for (const m of messages.slice(0, upper)) {
+      historyTokens += estimateTokens(contentToString(m.content));
+    }
+    const apiKeyPrefix = extractAPIKeyPrefix(ctx);
+    const pt = estimateTokens(opts.sentPrompt);
+    const ct = estimateTokens(res.text);
+    // Storage review P0-1: this used to be `listResolverSessions(...).length`
+    // — up to 50 full-transcript KV reads per request for a single number.
+    const activeSessions = await countResolverSessions(ctx.env);
+    await recordCacheRequest(ctx.env, apiKeyPrefix, historyTokens > 0, pt, historyTokens, activeSessions);
+    await recordUsage(ctx.env, {
+      time: new Date().toISOString(),
+      api_key_prefix: apiKeyPrefix,
+      account_email: acc.email,
+      model: opts.model,
+      endpoint: opts.endpoint,
+      stream: opts.stream,
+      input_tokens: pt,
+      output_tokens: ct,
+      cache_tokens: historyTokens,
+      duration_ms: Date.now() - opts.startedAt,
+      status: 200,
+    });
   });
 }
 

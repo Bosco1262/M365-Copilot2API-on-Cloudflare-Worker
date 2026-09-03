@@ -79,11 +79,23 @@ async function load(env: Env): Promise<HealthDoc> {
 // Port of Server.lastHealthyAccount: the most recently successful account is
 // preferred for the next unpinned request so round-robin does not fragment
 // cloud sessions (C4).
+//
+// Storage review P1-2: this pointer is a preference, not state — rewriting it
+// on every resolveAccount burned one KV write per request against the
+// 1,000/day free budget. Track the last remembered account per isolate and
+// only write on change; a failed write resets the tracker so the next resolve
+// retries. After 12h the TTL expires the entry (preference reverts to plain
+// round-robin until the account changes again) — acceptable by design.
+let lastRememberedHealthy = "";
+
 async function rememberHealthy(env: Env, accountID: string): Promise<void> {
+  if (accountID === lastRememberedHealthy) return;
+  lastRememberedHealthy = "";
   try {
     await env["m365-copilot2api_KV"].put(LAST_HEALTHY_KEY, accountID, {
       expirationTtl: 12 * 3600,
     });
+    lastRememberedHealthy = accountID;
   } catch {
     /* non-fatal */
   }
@@ -224,7 +236,11 @@ export async function markImageLimited(env: Env, accountID: string): Promise<voi
 // Port of accountPool.MarkCall: per-account call counter (fed by every
 // ChatHub round-trip through chatWithAccount, upstream account_concurrency.go).
 export async function markCall(env: Env, accountID: string): Promise<void> {
-  await coordHealthMarkCall(env, accountID);
+  const ok = await coordHealthMarkCall(env, accountID);
+  // Same contract as markFailure/markSuccess: with the DO bound it is the
+  // authority — the KV "account-health" document is the no-DO fallback only,
+  // so a bound DO must not pay a KV read-modify-write per ChatHub round-trip.
+  if (ok) return;
   const h = await load(env);
   h.calls[accountID] = (h.calls[accountID] ?? 0) + 1;
   await putJSON(env["m365-copilot2api_KV"], KEY, h);
@@ -234,7 +250,8 @@ export async function markCall(env: Env, accountID: string): Promise<void> {
 // payload so the console can show per-account usage pressure.
 export async function updateThrottling(env: Env, accountID: string, data: unknown): Promise<void> {
   if (data === null || data === undefined) return;
-  await coordHealthUpdateThrottling(env, accountID, data);
+  const ok = await coordHealthUpdateThrottling(env, accountID, data);
+  if (ok) return; // DO answered: skip the no-DO KV fallback write.
   const h = await load(env);
   h.throttling[accountID] = data;
   await putJSON(env["m365-copilot2api_KV"], KEY, h);

@@ -101,18 +101,30 @@ async function d1List(env: Env): Promise<ApiKeyRecord[] | null> {
   }
 }
 
+// Storage review P0-2: validKey runs on every request and used to probe the
+// whole api_keys table (d1List) just to decide whether the lazy backfill had
+// happened yet. The migration is one-time by construction, so latch it per
+// isolate once the table is known to be populated.
+let kvBackfilled = false;
+
 /** One-time lazy migration: KV doc -> D1 rows when the table is still empty. */
 async function d1BackfillFromKV(env: Env): Promise<void> {
+  if (kvBackfilled) return;
   const rows = await d1List(env);
-  if (!rows || rows.length > 0) return;
+  if (!rows) return; // D1 unavailable: keep probing on later requests
+  if (rows.length > 0) {
+    kvBackfilled = true;
+    return;
+  }
   const doc = await loadDoc(env);
-  if (doc.keys.length === 0) return;
+  if (doc.keys.length === 0) return; // nothing anywhere yet: keep probing (0-row read)
   for (const k of doc.keys) {
     try {
       await env.DB!.prepare(UPSERT_SQL).bind(...recordValues(k)).run();
     } catch {}
   }
   console.log(`[keys] backfilled ${doc.keys.length} KV keys into D1`);
+  kvBackfilled = true;
 }
 
 /** Mirror one record into the legacy KV document (rollback safety net). */

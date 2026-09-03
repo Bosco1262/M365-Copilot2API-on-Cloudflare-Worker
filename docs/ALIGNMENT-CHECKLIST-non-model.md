@@ -42,22 +42,22 @@
 
 | # | 功能点 | 上游 | Worker | 状态 | 检测要点 |
 |---|--------|------|--------|------|---------|
-| C1 | 数据持久化 | JSON 文件 + persistStore | KV 文档键 + D1 行（优先） | ⚠️ [平台] | **2026-08-27 storage audit 后**：D1 绑定时 api_keys/accounts/cache_stats 迁 D1 行（0003）、resolver 索引迁 D1（0004）、usage/debug 迁 D1（0001），KV 文档降级为镜像+回退（仅结构性变更写镜像）；未绑 D1 时 KV 文档即时写替代落盘循环 |
-| C2 | 敏感数据 | atomicfile 0600 + 加密 | KV/D1 边界 | [用户选择] | 见 A12；refresh token 明文存 KV 文档或 accounts 表，依赖平台边界安全——已确认选择，非待办 |
+| C1 | 数据持久化 | JSON 文件 + persistStore | KV 文档键 + D1 行（优先） | ⚠️ [平台] | **2026-08-27 storage audit + 2026-08-30/31 free-tier 优化后**：D1 优先范围扩至 0001-0006 全部业务存储（0005 conversations/session_bindings/user_sessions/conv_cache、0006 resolver blobs），**每请求 KV 写 8.1 → ≈0.2、KV 写退出绑定链**；KV 降级为 no-D1 兜底 + 一次性懒回填（闩锁）+ D1-miss 回退；accounts 镜像去 token（纯结构清单）；未绑 D1 时 KV 文档即时写替代落盘循环 |
+| C2 | 敏感数据 | atomicfile 0600 + 加密 | KV/D1 边界 | [用户选择] | 见 A12；refresh token 明文存 D1 accounts 表（KV-only 部署存 KV 文档），依赖平台边界安全——已确认选择，非待办；**free-tier 优化追加：KV 镜像已剥离 token（纯结构清单），消除回滚误兑单用 refresh token 杀死账号的隐患** |
 | C3 | 用量统计 | usage.jsonl（5 万条滚动） | KV 日桶（90 天、单桶 5000 条）或 D1 usage_events | ⚠️ [简化] | Free 计划面板最多读约 30 桶；**已修（2026-08-27）：D1 分支 usage_events 补 cron TTL 清理**（usage.ts cleanupOld 挂 */30 调度，DELETE 90 天前，对齐上游 5 万条滚动上限语义） |
 | C4 | 调试日志 | debug.go 文件 | KV 环形（≤256KiB/条、**48h TTL**、500 条）或 D1 debug_records（7 天） | ⚠️ [简化] | 500 条上限/256KiB 截断/敏感键脱敏/仅 debug 等级捕获均对齐；流式经 tee 聚合补录 responseBody；D1 分支保留 7 天（cron DELETE） |
-| C5 | D1 可选绑定 | —（无） | migrations 0001-0004 + chatMessages.ts | 🟦 新增 | 0001 usage_events/debug_records、0002 chat_messages、0003 api_keys/accounts/cache_stats（storage audit）、0004 resolver_sessions（storage review）；各 store D1 优先 + KV 镜像/懒回填 + 未绑定自动回退 KV |
-| C6 | DO 协调（锁定/游标/信号量/刷新互斥） | 进程内 | `src/do/coordination.ts` | ✅ | COORD 绑定时跨 isolate 强一致；未绑定回退 isolate 行为 |
+| C5 | D1 可选绑定 | —（无） | migrations 0001-0006 + chatMessages.ts | 🟦 新增 | 0001 usage_events/debug_records、0002 chat_messages、0003 api_keys/accounts/cache_stats（storage audit）、0004 resolver_sessions（storage review）、**0005 conversations/session_bindings/user_sessions/conv_cache（free-tier Phase 2）、0006 resolver_session_blobs（free-tier Phase 3）**；各 store D1 优先 + KV 兜底/懒回填（闩锁）/D1-miss 回退 + 未绑定自动回退 KV；resolver 批量 IN 查询 + 读侧 2h 新鲜度 |
+| C6 | DO 协调（锁定/游标/信号量/刷新互斥） | 进程内 | `src/do/coordination.ts` | ✅ | COORD 绑定时跨 isolate 强一致；未绑定回退 isolate 行为；**已修（2026-08-30）：markCall/updateThrottling 补 `{ok}` 应答早退（DO 绑定时每请求 −2 KV 读 −2 KV 写）**；Phase 3 观察项（McpSessionDO Hibernation / DO 状态拆表 / /acquire 去自旋）触发未满足，刻意不做 |
 
 ## D. 会话与对话
 
 | # | 功能点 | 上游 | Worker | 状态 | 检测要点 |
 |---|--------|------|--------|------|---------|
-| D1 | 内容键会话复用（显式 ID>前缀>后缀，IP+UA 指纹，512 上限，LRU 1000） | session_resolver.go | `src/pipeline/resolver.ts` | ✅ | 逐字移植；README"Jaccard"为上游文档滞后 |
+| D1 | 内容键会话复用（显式 ID>前缀>后缀，IP+UA 指纹，512 上限，LRU 1000） | session_resolver.go | `src/pipeline/resolver.ts` | ✅ | 逐字移植；README"Jaccard"为上游文档滞后；**已修（2026-08-31）：resolver 增量命中时 attachments 替换为增量切片附件（openai.ts，对齐 server.go:1740-1745 `body.Attachments = incAtt`）——此前漏移植导致第 1 轮图片在后续纯文本轮次被重复上传，M365 同会话回复"你这次上传的图片仍然是…"（图片重放 bug）** |
 | D2 | SESSION/CONTEXT TTL 旋钮 | env | 固定 2h | ❌ | M365_SESSION_TTL_MINUTES / M365_CONTEXT_TTL_MINUTES 未读取 |
 | D3 | 用户级会话（body.user → 固定账号+对话） | sessions.go | `src/admin/extras.ts` | ✅ | tenant=SHA-256(API key)，7 天 TTL（旋钮未读取） |
-| D4 | convCache 增量复用 | conv_cache.go | `src/store/convCache.ts` | ✅ | account+model 粒度（C7 已对齐）、sysHash、2h TTL |
-| D5 | 自动清理（闲置 2h/keepN=5/保护集/删联动/30 删除预算） | auto_cleanup.go | `src/pipeline/cleanup.ts` Cron | ✅ | Cron 每 30 分钟；单次 30 删除预算 [简化] |
+| D4 | convCache 增量复用 | conv_cache.go | `src/store/convCache.ts` | ✅ | account+model 粒度（C7 已对齐）、sysHash、2h TTL；**已修（2026-08-31）：convCache 增量命中时 attachments 同步替换为增量切片附件（openai.ts，对齐 server.go:1778-1784 `body.Attachments = incAtt`），同 D1 图片重放修复；测试 test/conv-cache.test.ts 两用例覆盖（纯文本 follow-up 附件清空 / follow-up 新图只传新图）** |
+| D5 | 自动清理（闲置 2h/keepN=5/保护集/删联动/删除预算） | auto_cleanup.go | `src/pipeline/cleanup.ts` Cron | ✅ | Cron 每 30 分钟；**单次删除预算 30 → 20（free-tier P1-6，级联账 KV deletes 不再触顶 1,000/天）** [简化] |
 | D6 | 白名单（KV 持久化+保护集+控制台卡片） | conversation_manager.go | `src/admin/extras.ts` | ✅ | /api/conversations/whitelist |
 | D7 | 云端对话列表 | m365cloud.go | `src/pipeline/m365cloud.ts` | ⚠️ | RefreshNavPane 已移植；**缺解析器会话合并行**（gateway 来源标记、chatName 推导、messageCount） |
 | D8 | 对话详情 | 云端实时拉取 | D1 `chat_messages` 转录 | ⚠️ [简化] | 仅记录本版本部署后的 /v1 轮次；D1 未绑定返回空时间线+detail_unavailable |
@@ -163,3 +163,5 @@
 5. **已落地（2026-08-27）**：B1 并发预筛+动态 Retry-After、B2 偏好并发检查、B3 全分类冷却+全局熔断+quotaAttempts+rateLimitCooldownSeconds、B6 并发满不进候选、B7 failover 原账号冷却、B8 MarkCall+视图字段+token-health 格式
 6. **已核实（2026-08-27）**：C1-C6 存储与状态逐项复核——C4 KV TTL 实为 48h（清单修正）、C5 migrations 已扩至 0004（清单修正）、C3 D1 分支 usage 清理缺口（**已修复**：usage.ts cleanupOld 挂 */30 cron，DELETE 90 天前）；默认映射表 gpt-image-2 tone `magic` → `Magic`（对齐上游 codex_catalog.go 白名单，KNOWN_UPSTREAM_TONES 同步）
 7. **已落地（2026-08-28）**：官方确认 ChatHub tone 为 `Magic`，全库统一大写（images.ts 图片生成、openai.ts 限流探测/empty 兜底、catalog.ts modelTone、test 断言、docs 引用同步；dist 需重新构建）——超前于上游 web 层（仍小写）
+8. **已落地（2026-08-31）**：图片重放 bug 修复（D1/D4）——prepareCore 的 convCache/resolver 增量命中分支此前只替换 answerPrompt、未替换 attachments（上游 server.go:1740-1745/1778-1784 均执行 `body.Attachments = incAtt`），导致多轮对话中历史图片每轮被 uploadAttachments 重新上传为新附件，M365 在同会话中回复"你这次上传的图片仍然是…"。现增量命中时用增量切片附件覆盖；复用未命中的全量路径与上游一致不改动。回归：test/conv-cache.test.ts +2 用例，npm run check 全绿（typecheck/vitest 217/i18n/wrangler dry-run）
+9. **已落地（2026-08-30/31，2026-09-03 复核入档）**：Storage Free-Tier 优化——migrations 扩至 **0001-0006**（0005 后台四存储 + 0006 resolver blobs 迁 D1），KV 写退出热路径（**每请求 8.1 → ≈0.2**，免费层承载 ≈123 → ≈2,400+/天）；新增 settings 30s 缓存、回填闩锁、resolver touch 10min 节流、d1TrimIndex 节流、recordFinalize step() 分段隔离、cleanup 预算 30→20、accounts 镜像去 token、markCall/updateThrottling 应答早退；vitest 23 文件/217 用例全绿。明细见 `docs/STORAGE-FREE-TIER-EXECUTION-STATUS-2026-08-31.md`；部署侧待办（远程迁移/commit+deploy/面板观测/真实账号回归）见其 §3.2

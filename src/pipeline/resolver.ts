@@ -39,6 +39,11 @@ export const DEFAULT_CONTEXT_TTL_MS = 2 * 60 * 60 * 1000;
 // Index entries are refreshed on touch at most this often, so a request that
 // only continues an existing session performs no index write at all.
 const INDEX_TOUCH_THROTTLE_MS = 5 * 60_000;
+// Session blob rewrites on the touch path are throttled to this window; the
+// 2h KV TTL only needs a refresh every ~10min to stay warm, so a busy session
+// does not pay one blob write per request. bindSession refreshes lastWriteAt
+// on every turn, so the steady-state cost is one blob write per exchange.
+const SESSION_TOUCH_THROTTLE_MS = 10 * 60_000;
 // Slack added when filtering candidates by the (throttled) index timestamps.
 const INDEX_STALE_SLACK_MS = 6 * 60_000;
 // Upper bound of full session reads per resolve (subrequest budget guard).
@@ -64,9 +69,11 @@ export interface ResolverSession {
   userField?: string;
   contextFinger?: string;
   contextHistory?: OaiMsg[];
+  /** Last time the blob itself was persisted (touch-write throttle). */
+  lastWriteAt?: string;
 }
 
-interface IndexEntry {
+export interface IndexEntry {
   sessionId: string;
   conversationId: string;
   accountId: string;
@@ -99,18 +106,129 @@ function toIndexEntry(s: ResolverSession): IndexEntry {
   };
 }
 
+// ------------------------------------------------------------- D1 layer ---
+// Storage review (Phase 3): per-session blobs move to D1
+// (migrations/0006_resolver_blobs_d1.sql) so the last per-request KV write
+// (bindSession) disappears — KV writes were the binding free-tier quota.
+// Oversized blobs (rare; D1 rows cap at 2 MB) and no-DB deployments stay on
+// KV, which also remains the read fallback on a D1 miss so pre-migration
+// entries keep working. KV TTL parity: freshness is enforced on read and
+// stale rows are pruned on a subset of writes.
+const MAX_D1_BLOB_CHARS = 1_500_000; // CJK-heavy outliers beyond this fail the insert and fall back to KV
+const BLOB_PRUNE_EVERY = 100;
+let blobWritesSincePrune = 0;
+
+interface BlobRow {
+  data: string;
+  last_used_at: string;
+}
+
+function parseBlob(json: string): ResolverSession | null {
+  try {
+    const s = JSON.parse(json) as ResolverSession;
+    if (!s || typeof s.sessionId !== "string" || s.sessionId === "") return null;
+    return s;
+  } catch {
+    return null;
+  }
+}
+
+/** Freshness check (KV TTL parity): expired blobs read as misses. */
+function blobExpired(lastUsedAt: string): boolean {
+  const t = Date.parse(lastUsedAt);
+  return !Number.isFinite(t) || Date.now() - t > SESSION_TTL_SECONDS * 1000;
+}
+
+const BLOB_UPSERT_SQL = `INSERT INTO resolver_session_blobs (session_id, data, last_used_at)
+VALUES (?, ?, ?)
+ON CONFLICT(session_id) DO UPDATE SET
+  data = excluded.data,
+  last_used_at = excluded.last_used_at`;
+
 async function getSession(env: Env, sessionId: string): Promise<ResolverSession | null> {
+  if (env.DB) {
+    try {
+      const row = await env.DB!
+        .prepare("SELECT data, last_used_at FROM resolver_session_blobs WHERE session_id = ?")
+        .bind(sessionId)
+        .first<BlobRow>();
+      if (row) return blobExpired(row.last_used_at) ? null : parseBlob(row.data);
+    } catch (e) {
+      console.warn("[resolver] D1 blob get failed, falling back to KV:", e instanceof Error ? e.message : e);
+    }
+  }
   return (await getJSON<ResolverSession>(env["m365-copilot2api_KV"], sessionKey(sessionId))) ?? null;
 }
 
+/** Batched blob fetch — one query for up to ~50 ids. The D1 free plan allows
+ *  only 50 queries per invocation, so point-query loops over the candidate
+ *  window are not an option. Returns null when D1 is unbound or errored so
+ *  callers fall back to per-id reads (D1 point + KV). */
+async function getSessionsBatch(
+  env: Env,
+  ids: string[]
+): Promise<Map<string, ResolverSession> | null> {
+  if (!env.DB || ids.length === 0) return null;
+  try {
+    const placeholders = ids.map(() => "?").join(", ");
+    const res = await env.DB!
+      .prepare(
+        `SELECT session_id, data, last_used_at FROM resolver_session_blobs WHERE session_id IN (${placeholders})`
+      )
+      .bind(...ids)
+      .all<{ session_id: string; data: string; last_used_at: string }>();
+    const map = new Map<string, ResolverSession>();
+    for (const r of res.results) {
+      if (blobExpired(r.last_used_at)) continue;
+      const s = parseBlob(r.data);
+      if (s) map.set(r.session_id, s);
+    }
+    return map;
+  } catch (e) {
+    console.warn("[resolver] D1 blob batch failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 async function putSession(env: Env, s: ResolverSession): Promise<void> {
+  const json = JSON.stringify(s);
+  if (env.DB && json.length <= MAX_D1_BLOB_CHARS) {
+    try {
+      await env.DB!.prepare(BLOB_UPSERT_SQL).bind(s.sessionId, json, s.lastUsedAt).run();
+      blobWritesSincePrune++;
+      if (blobWritesSincePrune >= BLOB_PRUNE_EVERY) {
+        blobWritesSincePrune = 0;
+        await env.DB!
+          .prepare("DELETE FROM resolver_session_blobs WHERE last_used_at < ?")
+          .bind(new Date(Date.now() - SESSION_TTL_SECONDS * 1000).toISOString())
+          .run();
+      }
+      return;
+    } catch (e) {
+      console.warn("[resolver] D1 blob put failed, falling back to KV:", e instanceof Error ? e.message : e);
+    }
+  }
   await putJSON(env["m365-copilot2api_KV"], sessionKey(s.sessionId), s, {
     expirationTtl: SESSION_TTL_SECONDS,
   });
 }
 
 async function deleteSession(env: Env, sessionId: string): Promise<void> {
-  await env["m365-copilot2api_KV"].delete(sessionKey(sessionId));
+  if (env.DB) {
+    try {
+      await env.DB!
+        .prepare("DELETE FROM resolver_session_blobs WHERE session_id = ?")
+        .bind(sessionId)
+        .run();
+    } catch (e) {
+      console.warn("[resolver] D1 blob delete failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  try {
+    await env["m365-copilot2api_KV"].delete(sessionKey(sessionId));
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**
@@ -190,8 +308,17 @@ async function d1BackfillIndexFromKV(env: Env): Promise<IndexEntry[]> {
   return entries;
 }
 
+// Storage review P1-4: COUNT(*) scans resolver_sessions on every bind. The
+// cap is also enforced by the LIMIT on loadIndex, so the trim is a periodic
+// guard rather than a per-write invariant — run it every N binds.
+const TRIM_EVERY_N_BINDS = 100;
+let bindsSinceTrim = 0;
+
 /** Bounded trim: drop rows beyond the newest maxSessions (bind path). */
 async function d1TrimIndex(env: Env, maxSessions: number): Promise<void> {
+  bindsSinceTrim++;
+  if (bindsSinceTrim < TRIM_EVERY_N_BINDS) return;
+  bindsSinceTrim = 0;
   try {
     const row = await env.DB!
       .prepare("SELECT COUNT(*) AS n FROM resolver_sessions")
@@ -343,9 +470,27 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
   const maxSessions = params.maxSessions ?? DEFAULT_MAX_SESSIONS;
 
   const touch = async (sess: ResolverSession, index: IndexEntry[]): Promise<ResolveResult> => {
-    sess.lastUsedAt = new Date().toISOString();
-    await putSession(env, sess);
-    await touchIndexEntry(env, index, sess.sessionId);
+    const now = Date.now();
+    sess.lastUsedAt = new Date(now).toISOString();
+    // Storage review P0: the session blob rewrite used to sit on the critical
+    // path with no failure isolation — a KV quota-exceeded throw surfaced as a
+    // user-facing 500. The refresh is now throttled (TTL-safe via lastWriteAt)
+    // and best-effort: losing a touch costs lastUsedAt freshness at most,
+    // never the conversation binding.
+    const lastWrite = Date.parse(sess.lastWriteAt ?? "");
+    if (!Number.isFinite(lastWrite) || now - lastWrite >= SESSION_TOUCH_THROTTLE_MS) {
+      sess.lastWriteAt = sess.lastUsedAt;
+      try {
+        await putSession(env, sess);
+      } catch (e) {
+        console.warn("[resolver] session touch write failed:", e instanceof Error ? e.message : e);
+      }
+    }
+    try {
+      await touchIndexEntry(env, index, sess.sessionId);
+    } catch (e) {
+      console.warn("[resolver] index touch failed:", e instanceof Error ? e.message : e);
+    }
     return {
       sessionId: sess.sessionId,
       conversationId: sess.conversationId,
@@ -388,8 +533,15 @@ export async function resolveSession(env: Env, params: ResolveParams): Promise<R
 
   if (messages.length > 0 && candidates.length > 0) {
     const sessions: ResolverSession[] = [];
+    // One batched read instead of up to MAX_CANDIDATES point queries (the D1
+    // free plan allows 50 queries per invocation). Ids missing from the batch
+    // (KV-only blobs, or expired) fall back to getSession, which resolves both.
+    const batch = await getSessionsBatch(env, candidates.map((c) => c.sessionId));
     for (const c of candidates) {
-      const s = await getSession(env, c.sessionId);
+      const s =
+        batch !== null && batch.has(c.sessionId)
+          ? batch.get(c.sessionId) ?? null
+          : await getSession(env, c.sessionId);
       if (s) sessions.push(s);
     }
 
@@ -473,6 +625,9 @@ export async function bindSession(env: Env, params: BindParams): Promise<void> {
     sess.conversationId = params.conversationId;
     sess.accountId = params.accountId;
     sess.lastUsedAt = now;
+    // bindSession always persists the blob (history changed); refresh the
+    // touch-throttle anchor so the next touch does not rewrite it again.
+    sess.lastWriteAt = now;
     sess.userField = params.userField ?? sess.userField;
     sess.ipFingerprint = params.ipFingerprint ?? sess.ipFingerprint;
     sess.contextFinger = finger;
@@ -499,6 +654,7 @@ export async function bindSession(env: Env, params: BindParams): Promise<void> {
       accountId: params.accountId,
       createdAt: now,
       lastUsedAt: now,
+      lastWriteAt: now,
       ipFingerprint: params.ipFingerprint,
       userField: params.userField,
       contextFinger: finger,
@@ -575,10 +731,16 @@ export async function listResolverSessions(env: Env): Promise<ResolverSession[]>
   const sorted = [...index].sort((a, b) => Date.parse(b.lastUsedAt) - Date.parse(a.lastUsedAt));
   const out: ResolverSession[] = [];
   // Full transcripts only for the most recent sessions (console views); the
-  // rest are returned as lightweight summaries straight from the index.
+  // rest are returned as lightweight summaries straight from the index. One
+  // batched D1 read covers the full-read window — console loads must not burn
+  // the 50-queries-per-invocation budget on point queries.
+  const fullIds = sorted.slice(0, LIST_MAX_FULL_READS).map((e) => e.sessionId);
+  const batch = fullIds.length > 0 ? await getSessionsBatch(env, fullIds) : null;
   for (let i = 0; i < sorted.length; i++) {
     if (i < LIST_MAX_FULL_READS) {
-      const s = await getSession(env, sorted[i].sessionId);
+      const id = sorted[i].sessionId;
+      const s =
+        batch !== null && batch.has(id) ? batch.get(id) ?? null : await getSession(env, id);
       if (s) {
         out.push(s);
         continue;
@@ -594,4 +756,18 @@ export async function listResolverSessions(env: Env): Promise<ResolverSession[]>
     });
   }
   return out;
+}
+
+/** Cheap session count for stats paths: index only, zero blob reads
+ * (storage review P0-1 — listResolverSessions used to fetch up to 50 full
+ * transcripts just to read `.length`). */
+export async function countResolverSessions(env: Env): Promise<number> {
+  const index = evictIndex(await loadIndex(env), DEFAULT_TTL_MS, DEFAULT_MAX_SESSIONS);
+  return index.length;
+}
+
+/** Index entries only (no session blob reads). Enough for callers that only
+ * need conversationId + lastUsedAt, e.g. the cleanup sweep's active set. */
+export async function listResolverIndex(env: Env): Promise<IndexEntry[]> {
+  return evictIndex(await loadIndex(env), DEFAULT_TTL_MS, DEFAULT_MAX_SESSIONS);
 }

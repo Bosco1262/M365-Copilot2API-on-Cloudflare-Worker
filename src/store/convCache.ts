@@ -1,9 +1,15 @@
-// Conversation cache (port of internal/web/conv_cache.go, KV storage):
+// Conversation cache (port of internal/web/conv_cache.go):
 // per (API key, account, model) bucket remembering the last conversation used
 // with a given system-prompt hash, so follow-up turns with more messages are
 // sent incrementally into the SAME cloud conversation instead of rebuilding
 // context from scratch. Pure optimization: any miss falls back to the
 // content-key session resolver.
+//
+// Storage review P1-1 (Phase 2): with the DB binding the cache lives in D1
+// (migrations/0005_background_writes_d1.sql) — one of the ~4 per-request KV
+// writes. KV stays as the no-D1 fallback and is still consulted on a D1 miss
+// so pre-migration entries keep working; freshness is enforced on read (KV
+// TTL parity) and stale rows are pruned on a subset of writes.
 
 import type { Env } from "../env";
 import type { OaiMsg } from "../pipeline/prompt";
@@ -20,6 +26,17 @@ export interface ConvCacheEntry {
 }
 
 const TTL_SECONDS = 2 * 3600; // same window as session reuse
+const CONV_CACHE_PRUNE_EVERY = 100;
+let writesSincePrune = 0;
+
+interface ConvCacheRow {
+  account_id: string;
+  conversation_id: string;
+  session_id: string;
+  message_count: number;
+  sys_hash: string;
+  last_used_at: string;
+}
 
 /** SHA-256 over system/developer message contents ("" when none present). */
 export async function computeSysHash(messages: OaiMsg[]): Promise<string> {
@@ -41,6 +58,30 @@ export function convCacheKeyFor(accountId: string, model: string): string {
 }
 
 export async function getConvCache(env: Env, key: string): Promise<ConvCacheEntry | null> {
+  if (env.DB) {
+    try {
+      const row = await env.DB
+        .prepare(
+          "SELECT account_id, conversation_id, session_id, message_count, sys_hash, last_used_at FROM conv_cache WHERE cache_key = ?"
+        )
+        .bind(key)
+        .first<ConvCacheRow>();
+      if (row) {
+        // KV TTL parity: expired entries are misses even though D1 has no TTL.
+        if (Date.now() - Date.parse(row.last_used_at) > TTL_SECONDS * 1000) return null;
+        return {
+          accountId: row.account_id,
+          conversationId: row.conversation_id,
+          sessionId: row.session_id,
+          messageCount: row.message_count,
+          sysHash: row.sys_hash,
+          lastUsedAt: row.last_used_at,
+        };
+      }
+    } catch {
+      /* fall back to KV below */
+    }
+  }
   try {
     const raw = await env["m365-copilot2api_KV"].get(key);
     if (!raw) return null;
@@ -55,6 +96,37 @@ export async function getConvCache(env: Env, key: string): Promise<ConvCacheEntr
 export async function putConvCache(env: Env, key: string, entry: ConvCacheEntry): Promise<void> {
   try {
     entry.lastUsedAt = new Date().toISOString();
+    if (env.DB) {
+      await env.DB
+        .prepare(`INSERT INTO conv_cache (cache_key, account_id, conversation_id, session_id, message_count, sys_hash, last_used_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(cache_key) DO UPDATE SET
+  account_id = excluded.account_id,
+  conversation_id = excluded.conversation_id,
+  session_id = excluded.session_id,
+  message_count = excluded.message_count,
+  sys_hash = excluded.sys_hash,
+  last_used_at = excluded.last_used_at`)
+        .bind(
+          key,
+          entry.accountId,
+          entry.conversationId,
+          entry.sessionId,
+          entry.messageCount,
+          entry.sysHash,
+          entry.lastUsedAt
+        )
+        .run();
+      writesSincePrune++;
+      if (writesSincePrune >= CONV_CACHE_PRUNE_EVERY) {
+        writesSincePrune = 0;
+        await env.DB
+          .prepare("DELETE FROM conv_cache WHERE last_used_at < ?")
+          .bind(new Date(Date.now() - TTL_SECONDS * 1000).toISOString())
+          .run();
+      }
+      return;
+    }
     await env["m365-copilot2api_KV"].put(key, JSON.stringify(entry), {
       expirationTtl: TTL_SECONDS,
     });

@@ -131,7 +131,13 @@ async function d1BackfillFromKV(env: Env): Promise<void> {
   console.log(`[accounts] backfilled ${doc.accounts.length} KV accounts into D1`);
 }
 
-/** Mirror one mutation into the legacy KV document (rollback safety net). */
+/** Mirror one mutation into the legacy KV document (rollback safety net).
+ *  Storage review P2-4: mirrored copies deliberately carry NO tokens —
+ *  refresh tokens are single-use, so the mirrored copy is always stale after
+ *  the first D1-side refresh, and redeeming a stale token can permanently
+ *  kill the account (see the file header). The mirror stays a structural
+ *  listing (ids / emails / flags) for rollback; live tokens live in D1 only.
+ *  KV-only deployments are unaffected: they write through saveDoc instead. */
 async function mirrorToKV(
   env: Env,
   mutate: (accounts: AccountToken[]) => boolean
@@ -139,6 +145,10 @@ async function mirrorToKV(
   try {
     const doc = await loadDoc(env);
     if (mutate(doc.accounts)) {
+      for (const a of doc.accounts) {
+        a.refreshToken = "";
+        a.accessToken = "";
+      }
       await putJSON(env["m365-copilot2api_KV"], KEY, doc);
     }
   } catch (e) {

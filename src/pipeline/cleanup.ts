@@ -5,7 +5,7 @@
 
 import type { Env } from "../env";
 import { firstAccountCloudClient } from "./m365cloud";
-import { listResolverSessions, unbindByConversation } from "./resolver";
+import { listResolverIndex, unbindByConversation } from "./resolver";
 import { listConversations, deleteLocalConversation } from "../store/conversations";
 
 export interface CleanupEnvConfig {
@@ -49,8 +49,10 @@ function numVar(env: Env, name: string, fallback: number): number {
 async function activeConversationSet(env: Env, windowMs: number): Promise<Set<string>> {
   const active = new Set<string>();
   const cutoff = Date.now() - windowMs;
-  for (const sess of await listResolverSessions(env)) {
-    if (Date.parse(sess.lastUsedAt) > cutoff) active.add(sess.conversationId);
+  // Storage review P0-1: index entries already carry conversationId and
+  // lastUsedAt — no need to read up to 50 full session transcripts here.
+  for (const e of await listResolverIndex(env)) {
+    if (Date.parse(e.lastUsedAt) > cutoff) active.add(e.conversationId);
   }
   for (const conv of await listConversations(env)) {
     if (Date.parse(conv.updatedAt) > cutoff) active.add(conv.id);
@@ -78,8 +80,12 @@ export async function autoCleanupOnce(
   if (!client) {
     return { deleted: 0, skipped: "m365 cloud client not configured" };
   }
-  // Subrequest budget guard (Free plan allows ~50 per invocation).
-  let deleteBudget = 30;
+  // Subrequest budget guard (Free plan allows ~50 per invocation). Storage
+  // review P1-6: each cloud delete is followed by 1-3 local KV deletes
+  // (conversation record + session bindings), and the cron fires 48x/day —
+  // 30/run peaked at ~1,440+ deletes/day against the 1,000/day free budget.
+  // 20/run keeps the worst case near the ceiling without stalling cleanup.
+  let deleteBudget = 20;
 
   const active = await activeConversationSet(env, config.maxAgeMs);
   const nowMs = Date.now();
