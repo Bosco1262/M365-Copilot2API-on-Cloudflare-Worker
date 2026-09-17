@@ -487,6 +487,16 @@ export default {
         } catch (e) {
           console.warn("[scheduled] usage cleanup failed:", e instanceof Error ? e.message : e);
         }
+        try {
+          // Daily structural KV mirror (storage review: 镜像降频): refresh the
+          // legacy accounts snapshot from D1 at most once per UTC day; the
+          // other cron runs are 1-read/0-write no-ops via the mirroredAt
+          // marker inside the KV doc.
+          const { dailyMirrorToKV } = await import("./store/accounts");
+          await dailyMirrorToKV(env);
+        } catch (e) {
+          console.warn("[scheduled] accounts KV mirror failed:", e instanceof Error ? e.message : e);
+        }
       })()
     );
   },

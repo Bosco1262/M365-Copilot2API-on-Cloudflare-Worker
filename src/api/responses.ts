@@ -8,7 +8,15 @@
 import type { HandlerCtx } from "../router";
 import { jsonOut, uuid } from "../util";
 import type { OaiMsg } from "../pipeline/prompt";
-import { runCompletionsCore, streamChatCompletions, m365Metadata, type OaiReqBody } from "./openai";
+import {
+  prepareCompletions,
+  answerCompletions,
+  streamChatCompletions,
+  m365Metadata,
+  type OaiReqBody,
+  type CoreSuccess,
+} from "./openai";
+import { bufferedJsonResponse } from "./buffered";
 
 interface ResponsesRequest {
   model?: string;
@@ -745,21 +753,46 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
   if (body.stream) {
     return streamResponsesAdapter(ctx, o, body, model, tenant, sessionId, startedAt);
   }
-  const core = await runCompletionsCore(ctx, o);
-  if (!core.ok) {
-    const errResp = core.error;
-    const status = errResp.status;
-    let message = "upstream protocol error";
-    try {
-      const data = (await errResp.clone().json()) as { error?: { message?: string } };
-      if (data?.error?.message) message = data.error.message;
-    } catch {
-      /* keep */
-    }
-    const type = status === 401 || status === 403 ? "auth_error" : status === 429 ? "rate_limit_error" : status === 400 ? "invalid_request_error" : "upstream_error";
-    return jsonOut({ error: { message, type } }, status);
+  // Fake non-stream transport (api/buffered.ts): validation + account
+  // resolution in the request phase (real 4xx), generation inside waitUntil
+  // so long replies don't blow the Free-plan 10ms CPU budget.
+  const staged = await prepareCompletions(ctx, o);
+  if (!staged.ok) {
+    return responsesCoreError(staged.error);
   }
-  const s = core.success;
+  return bufferedJsonResponse(ctx, async () => {
+    const core = await answerCompletions(ctx, o, staged);
+    if (!core.ok) {
+      return responsesCoreError(core.error);
+    }
+    return buildNonStreamResponsesResult(ctx, o, core.success, { model, tenant, sessionId, startedAt });
+  });
+}
+
+// Buffered-transport error mapping: same shape/status the branch produced
+// before (only the buffered transport loses the status mid-flight; the body
+// carries the error either way).
+async function responsesCoreError(errResp: Response): Promise<Response> {
+  const status = errResp.status;
+  let message = "upstream protocol error";
+  try {
+    const data = (await errResp.clone().json()) as { error?: { message?: string } };
+    if (data?.error?.message) message = data.error.message;
+  } catch {
+    /* keep */
+  }
+  const type = status === 401 || status === 403 ? "auth_error" : status === 429 ? "rate_limit_error" : status === 400 ? "invalid_request_error" : "upstream_error";
+  return jsonOut({ error: { message, type } }, status);
+}
+
+// WaitUntil-phase assembly of the one-shot /v1/responses JSON result.
+async function buildNonStreamResponsesResult(
+  ctx: HandlerCtx,
+  o: OaiReqBody,
+  s: CoreSuccess,
+  meta: { model: string; tenant: string; sessionId: string; startedAt: number }
+): Promise<Response> {
+  const { model, tenant, sessionId, startedAt } = meta;
 
   // Build an internal OpenAI-shaped result then project it.
   const assistant: Record<string, unknown> = { role: "assistant", content: s.text };
@@ -812,7 +845,7 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
         account_email: s.acc.email,
         model,
         endpoint: "/v1/responses",
-        stream: !!body.stream,
+        stream: false,
         input_tokens: estimate.values.input_tokens as number,
         output_tokens: estimate.values.output_tokens as number,
         cache_tokens: 0,
@@ -822,7 +855,7 @@ export async function handleResponses(ctx: HandlerCtx): Promise<Response> {
     })
   );
 
-  return buildResponsesResponse(model, !!body.stream, src);
+  return buildResponsesResponse(model, false, src);
 }
 
 function extractTenant(ctx: HandlerCtx): string {

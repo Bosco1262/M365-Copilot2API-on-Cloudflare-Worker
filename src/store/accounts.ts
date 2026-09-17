@@ -156,6 +156,36 @@ async function mirrorToKV(
   }
 }
 
+/** Daily snapshot (storage review: 镜像降频): refresh the structural KV mirror
+ *  from D1 at most once per UTC day. Called from the scheduled handler (the
+ *  cron fires every 30 min; the mirroredAt marker inside the doc makes the
+ *  other runs 1-read/0-write no-ops). Mirrored rows carry NO tokens (P2-4:
+ *  single-use refresh tokens must never round-trip through KV) — the mirror
+ *  stays a rollback listing of ids/emails/flags; live tokens live in D1 only.
+ *  KV-only deployments are unaffected (they write through saveDoc already). */
+export async function dailyMirrorToKV(env: Env): Promise<void> {
+  if (!env.DB) return;
+  try {
+    const kv = env["m365-copilot2api_KV"];
+    const today = new Date().toISOString().slice(0, 10);
+    const doc = await getJSON<AccountsDoc & { mirroredAt?: string }>(kv, KEY);
+    if (doc?.mirroredAt === today) return; // already mirrored today: 0 writes
+    const rows = await d1List(env);
+    if (!rows) return;
+    for (const a of rows) {
+      a.refreshToken = "";
+      a.accessToken = "";
+    }
+    await putJSON(kv, KEY, {
+      accounts: rows,
+      nextIdx: doc?.nextIdx ?? 0,
+      mirroredAt: today,
+    });
+  } catch (e) {
+    console.warn("[accounts] daily KV mirror failed:", e instanceof Error ? e.message : e);
+  }
+}
+
 /** Atomic row upsert with one optimistic-lock retry (see UPDATE_SQL).
  *  Returns whether the row was INSERTed (new account) so callers can decide
  *  which side effects (KV mirror, DO cache invalidation) apply. */

@@ -39,6 +39,7 @@
 | API Key 校验 | `src/api/auth.ts` | `server.go`（validAPIKey/extractAPIKey） | ✅ 双向对应 |
 | SSE 辅助 | `src/api/sse.ts` | `internal/web/stream.go` | ✅ 双向对应 |
 | 流式文本 holdback（围栏扣留） | `src/api/holdback.ts` | `server.go` 流式分支内联（无独立文件） | ✅ 双向对应（行为移植） |
+| 伪非流式缓冲传输（Free 版 10ms CPU 规避：非流式请求立即提交响应头，生成在 waitUntil 分片执行，完成后一次性写出 JSON body） | `src/api/buffered.ts` | （无上游对应——Workers 运行时适配） | 🟦 仅当前仓库（2026-09-17 新增；`runCompletionsCore` 相应拆为 prepareCompletions/answerCompletions 两阶段） |
 | 控制台聊天（原生 / 流） | `src/admin/chat.ts` | `server.go`（chatOnce）、`stream.go`（chatStream） | ✅ 双向对应 |
 | 全部 `/api/*` 管理端点 | `src/admin/handlers.ts` | `server.go`、`admin_security.go`、`settings.go`、`keys.go`、`account_health.go`、`version.go`、`deployments.go`、PKCE 流程 | ✅ 双向对应 |
 | 白名单 / 用户会话 / 调试 / memory / 部署 stub | `src/admin/extras.ts` | `conversation_manager.go`、`sessions.go`、`debug.go`、`memory_handlers.go`、`deployments.go`、`plugins.go` | ✅ 双向对应（`/api/plugins` 已实现：substrate 透传 + 5min KV 缓存，2026-08-27 复核） |

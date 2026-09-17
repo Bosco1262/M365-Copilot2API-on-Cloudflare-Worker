@@ -13,7 +13,8 @@ import type { HandlerCtx } from "../router";
 import { uuid, estimateTokens } from "../util";
 import type { OaiMsg } from "../pipeline/prompt";
 import {
-  runCompletionsCore,
+  prepareCompletions,
+  answerCompletions,
   prepareCore,
   resolveAndValidateAccount,
   chatCall,
@@ -24,6 +25,7 @@ import {
   type OaiReqBody,
   type CoreSuccess,
 } from "./openai";
+import { bufferedJsonResponse } from "./buffered";
 import { adaptiveToolCallLimit, buildToolResponse, fencedToolCalls, validateDetectedToolCalls, limitToolCalls, type DetectedToolCall } from "../pipeline/tools";
 import { sseHeaders } from "./sse";
 import { getSettings } from "../store/settings";
@@ -382,12 +384,22 @@ export async function handleAnthropicMessages(ctx: HandlerCtx): Promise<Response
     return anthropicErrorMessage(400, error);
   }
 
-  const core = await runCompletionsCore(ctx, o);
-  if (!core.ok) {
-    return coreErrorToAnthropic(core.error, "upstream protocol error");
+  // Fake non-stream transport (api/buffered.ts): validation + account
+  // resolution in the request phase (real 4xx), generation inside waitUntil
+  // so long replies don't blow the Free-plan 10ms CPU budget. Mid-generation
+  // failures are relayed in-band as an Anthropic error body (status committed
+  // as 200 by the buffered transport).
+  const staged = await prepareCompletions(ctx, o);
+  if (!staged.ok) {
+    return coreErrorToAnthropic(staged.error, "request failed");
   }
-
-  return buildAnthropicResponse(body.model || DEFAULT_MODEL, false, core.success);
+  return bufferedJsonResponse(ctx, async () => {
+    const core = await answerCompletions(ctx, o, staged);
+    if (!core.ok) {
+      return coreErrorToAnthropic(core.error, "upstream protocol error");
+    }
+    return buildAnthropicResponse(body.model || DEFAULT_MODEL, false, core.success);
+  });
 }
 
 // ------------------------------------------------------------- streaming ---

@@ -54,6 +54,12 @@
 
 **仍保留的 C 级差异**：C1 WS 连接池（Workers 平台限制）、C5 并发门控降级语义（DO 未绑定时静默不门控，有意保留）、C11 Anthropic 流式形态（TS 真增量优于上游重放，保留）、C16 admin 密码未配置检查。
 
+**第五轮（2026-09-17，伪非流式缓冲传输，Free 版 10ms CPU 规避）**：
+
+| # | 变更 | 状态 |
+|---|---|---|
+| E5 | 非流式请求 CPU 超限（1102）：`stream:false` 时整个生成在请求阶段同步执行，长回复撞 Free 版 10ms CPU 上限；流式路径因"立即返回 Response + waitUntil 分片执行"不受影响 | ✅ 新增 `src/api/buffered.ts` `bufferedJsonResponse`（伪非流式）：三个非流式入口（`/v1/chat/completions`、`/v1/messages`、`/v1/responses`）改为"请求阶段仅做 prepareCore + 账号解析（保留真实 4xx），生成放 `waitUntil`，完成后一次性写出完整 JSON body"。`runCompletionsCore` 拆为 `prepareCompletions`/`answerCompletions` 两阶段（原签名保留为薄包装）。取舍：响应头提前提交为 200，生成中途失败以 body 内 `error` 字段传递；非流式响应的 `X-M365-*` 头折叠进 body 的 `m365` 字段（`contextTruncated` 等） |
+
 **第四轮（2026-08-27 晚间，A3/A5/A9/A10 批量修复）**：
 
 | # | 差异 | 状态 |

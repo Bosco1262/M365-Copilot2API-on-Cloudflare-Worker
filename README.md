@@ -40,7 +40,7 @@
 
 ## 部署
 
-> **前置要求**：Cloudflare 账号；Node.js 18+（仅 CLI 方式需要）。**强烈建议 Workers Paid（$5/月）**：Free 计划每请求仅 10ms CPU 时间，长对话的流式帧解析可能触发 1102 错误（等待网络不占 CPU，但 JSON 解析占）。Paid 默认 30s 并可在 `wrangler.jsonc` 中调至 5 分钟：
+> **前置要求**：Cloudflare 账号；Node.js 18+（仅 CLI 方式需要）。**强烈建议 Workers Paid（$5/月）**：Free 计划每请求仅 10ms CPU 时间，长对话的流式帧解析可能触发 1102 错误（等待网络不占 CPU，但 JSON 解析占）。非流式（`stream:false`）请求自 2026-09-17 起已内置伪非流式缓冲传输（生成在响应头提交后分片执行），长回复不再集中消耗请求阶段 CPU；但付费版仍有必要。Paid 默认 30s 并可在 `wrangler.jsonc` 中调至 5 分钟：
 >
 > ```jsonc
 > "limits": { "cpu_ms": 300000 }

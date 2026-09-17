@@ -78,6 +78,7 @@ import {
 } from "../errors";
 import { coordAcquireAccount, coordReleaseAccount } from "../do/coordination";
 import { sseHeaders } from "./sse";
+import { bufferedJsonResponse } from "./buffered";
 import { createTextHoldback } from "./holdback";
 import {
   getSessionBinding,
@@ -1017,18 +1018,50 @@ export async function recordFinalize(
 }
 
 // Shared non-stream pipeline used by /v1/chat/completions and /v1/messages.
-export async function runCompletionsCore(
+//
+// Split into two stages so the buffered (fake non-stream) transport can run
+// the cheap request-phase part eagerly and the expensive generation inside
+// ctx.waitUntil() — see api/buffered.ts for the Free-plan 10ms CPU rationale:
+// - prepareCompletions: prompt prep + account resolution (fast, real 4xx).
+// - answerCompletions:  upstream round-trips + post-processing (heavy).
+export interface CompletionsStage {
+  prepared: PreparedRequest;
+  acc: AccountToken;
+  // Per-account concurrency slot holder; released by answerCompletions.
+  release?: () => Promise<void>;
+  startedAt: number;
+}
+
+export type CompletionsCoreResult =
+  | { ok: false; error: Response }
+  | { ok: true; success: CoreSuccess };
+
+export async function prepareCompletions(
   ctx: HandlerCtx,
   rawBody: OaiReqBody
-): Promise<{ ok: false; error: Response } | { ok: true; success: CoreSuccess }> {
+): Promise<{ ok: false; error: Response } | ({ ok: true } & CompletionsStage)> {
   const startedAt = Date.now();
   const prep = await prepareCore(ctx, rawBody);
   if (!prep.ok) return prep;
-  const prepared = prep.prepared;
 
-  const accRes = await resolveAndValidateAccount(ctx, prepared);
+  const accRes = await resolveAndValidateAccount(ctx, prep.prepared);
   if (!accRes.ok) return accRes;
-  let acc = accRes.acc;
+  return {
+    ok: true,
+    prepared: prep.prepared,
+    acc: accRes.acc,
+    release: accRes.release,
+    startedAt,
+  };
+}
+
+export async function answerCompletions(
+  ctx: HandlerCtx,
+  rawBody: OaiReqBody,
+  stage: CompletionsStage
+): Promise<CompletionsCoreResult> {
+  const { prepared, startedAt } = stage;
+  let acc = stage.acc;
 
   const settings = await getSettings(ctx.env);
   // Failover only for rate-limit/auth failures on unpinned requests (A1).
@@ -1260,8 +1293,20 @@ export async function runCompletionsCore(
     return { ok: false, error: writeUpstreamError(err) };
   } finally {
     // Free the per-account concurrency slot (no-op when ungated).
-    await accRes.release?.();
+    await stage.release?.();
   }
+}
+
+// Backward-compatible wrapper: prepare + answer in one call, all in the
+// request phase. Callers that adopt bufferedJsonResponse should use the split
+// stages instead so the heavy part runs inside waitUntil.
+export async function runCompletionsCore(
+  ctx: HandlerCtx,
+  rawBody: OaiReqBody
+): Promise<CompletionsCoreResult> {
+  const staged = await prepareCompletions(ctx, rawBody);
+  if (!staged.ok) return staged;
+  return answerCompletions(ctx, rawBody, staged);
 }
 
 function normalizedChoice(choice: unknown): string {
@@ -1285,7 +1330,24 @@ export async function handleChatCompletions(ctx: HandlerCtx): Promise<Response> 
     return streamChatCompletions(ctx, body);
   }
 
-  const core = await runCompletionsCore(ctx, body);
+  // Fake non-stream transport (api/buffered.ts): cheap validation + account
+  // resolution run in the request phase (real 4xx preserved); the generation
+  // runs inside waitUntil so the Free-plan 10ms CPU budget is spent in bursts
+  // between I/O gaps — the same invocation shape as the streaming path.
+  const staged = await prepareCompletions(ctx, body);
+  if (!staged.ok) return staged.error;
+  return bufferedJsonResponse(ctx, () => buildNonStreamChatResponse(ctx, body, staged));
+}
+
+// WaitUntil-phase assembly of the one-shot OpenAI JSON response. The X-M365-*
+// response headers are folded into the body's m365 object because the buffered
+// transport commits the response headers before the outcome is known.
+async function buildNonStreamChatResponse(
+  ctx: HandlerCtx,
+  body: OaiReqBody,
+  staged: { ok: true } & CompletionsStage
+): Promise<Response> {
+  const core = await answerCompletions(ctx, body, staged);
   if (!core.ok) return core.error;
   const s = core.success;
 
@@ -1315,12 +1377,11 @@ export async function handleChatCompletions(ctx: HandlerCtx): Promise<Response> 
   const assistant: Record<string, unknown> = { role: "assistant", content };
   if (s.res.reasoning) assistant["reasoning_content"] = s.res.reasoning;
 
-  const headers: Record<string, string> = {};
-  if (s.contextTruncated) headers["X-M365-Context-Truncated"] = "1";
-  // C14: throttling / scores / metrics headers (server.go 2727-2736 parity).
-  if (s.res.throttling != null) headers["X-M365-Throttling"] = JSON.stringify(s.res.throttling);
-  if (s.res.scores && s.res.scores.length > 0) headers["X-M365-Scores"] = JSON.stringify(s.res.scores);
-  if (s.res.timestamps?.requestSent) headers["X-M365-Metrics"] = JSON.stringify(s.res.timestamps);
+  const m365 = m365Metadata(s.res, ctx.env);
+  // Buffered transport: response headers are already committed, so the
+  // X-M365-* metadata rides in the body instead (throttling / scores /
+  // timestamps are already part of m365Metadata; C14 headers dropped).
+  if (s.contextTruncated) m365["contextTruncated"] = true;
 
   return jsonOut(
     {
@@ -1329,15 +1390,14 @@ export async function handleChatCompletions(ctx: HandlerCtx): Promise<Response> 
       created: Math.floor(Date.now() / 1000),
       model: s.model,
       choices: [{ index: 0, message: assistant, finish_reason: "stop" }],
-      m365: m365Metadata(s.res, ctx.env),
+      m365,
       usage: {
         prompt_tokens: s.promptTokens,
         completion_tokens: s.completionTokens,
         total_tokens: s.promptTokens + s.completionTokens,
       },
     },
-    200,
-    headers
+    200
   );
 }
 

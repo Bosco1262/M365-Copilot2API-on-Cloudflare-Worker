@@ -206,6 +206,9 @@ describe("A5: rate-limit notice confirmation", () => {
     expect(chatMock).toHaveBeenCalledTimes(2); // chat + probe
     expect(markSuccessMock).toHaveBeenCalled(); // false positive, no cooldown
     expect(markFailureMock).not.toHaveBeenCalled();
-    expect(res.status).toBe(429); // the original request still surfaced 429
+    // Buffered non-stream transport: the status is committed as 200 up front;
+    // the rate-limit failure rides in-band in the JSON body.
+    const errBody = (await res.json()) as { error?: { type?: string } };
+    expect(errBody?.error?.type).toBe("rate_limit_error");
   });
 });
